@@ -4,13 +4,11 @@
 # hpaio backend still speaks HP's proprietary SOAP scan protocol (TCP 8289), so
 # we run that inside Linux.
 #
-# This file defines the VM only. Software setup lives in provision/ and is
-# applied by bin/setup, so it can be re-run without rebuilding the VM.
-#
-#   limactl start --name=scanbox ./scanbox.yaml
+# This file defines the VM only. `scanner` creates it on demand; software setup
+# lives in provision/ and is applied over stdin by lib/vm.sh.
 
-# Only the image defaults. Deliberately NOT template:_default/mounts -- that
-# mounts ~ read-only, which shadows the writable project mount below.
+# Only the image defaults. Deliberately NOT template:_default/mounts -- that base
+# mounts the home directory, which this VM has no need to see.
 base:
   - template:_images/debian-13
 
@@ -21,13 +19,16 @@ cpus: 2
 memory: "2GiB"
 disk: "16GiB"
 
-# vzNAT puts the guest on the host's 192.168.64.0/24 vmnet, so the Mac can reach
-# AirSane directly rather than through port forwards. Outbound NAT still lets the
-# guest reach the printer on the physical LAN.
+# vzNAT gives the guest outbound access to the physical LAN so it can reach the
+# printer, and a stable address on the host's 192.168.64.0/24 vmnet.
+#
+# Note the guest still cannot do mDNS -- multicast does not cross this boundary,
+# which is why all discovery happens host-side and only an IPv4 address is passed in.
 networks:
   - vzNAT: true
 
 
-mounts:
-  - location: "~/devel/scanbox"
-    writable: true
+# No mounts at all. Provisioning scripts are piped in over stdin and scans come
+# back via `limactl copy`, so the VM has no dependency on where this repo lives --
+# which is what lets it be created from scratch on another machine.
+mounts: []

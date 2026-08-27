@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+# scanner -- scan from an HP MFP that macOS can no longer talk to.
+#
+# The printer predates eSCL/AirScan, so macOS dropped its scanning path. HPLIP's
+# hpaio backend still speaks the protocol, so it runs in a Debian VM that this
+# script treats as a runtime resource: created on demand, started on demand, and
+# stopped again once idle.
+set -euo pipefail
+
+# Resolve through symlinks: this is normally invoked via ~/.local/bin/scanner, and
+# macOS has no `readlink -f`.
+_src="${BASH_SOURCE[0]}"
+while [ -L "$_src" ]; do
+  _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+  _src="$(readlink "$_src")"
+  case "$_src" in /*) ;; *) _src="$_dir/$_src" ;; esac
+done
+ROOT="$(cd -P "$(dirname "$_src")/.." && pwd)"
+. "$ROOT/lib/common.sh"
+. "$ROOT/lib/discover.sh"
+. "$ROOT/lib/vm.sh"
+
+OUT_DIR="${SCANBOX_OUT:-$HOME/Pictures/Scans}"
+NAME=""; DPI=300; MODE=Color; PAGE=auto; LOSSLESS=0; KEEP_ALIVE=60; PRINTER_OVERRIDE=""
+SOURCE=auto
+CMD=scan
+
+usage() {
+  cat <<'EOF'
+scanner -- scan from the network MFP
+
+  scanner                 scan whatever is loaded (feeder if present, else the bed)
+  scanner feeder          force the document feeder
+  scanner bed             force the flatbed
+  scanner find            discover scanners on the network
+  scanner status          VM state, config, resolved printer
+  scanner stop            stop the VM now
+
+Options
+  --out DIR         where PDFs land        (default ~/Pictures/Scans)
+  --name NAME       base filename          (default scan-YYYYMMDDHHMMSS)
+  --dpi N           resolution             (default 300; 75..1200)
+  --mode M          Color|Gray|Lineart     (default Color)
+  --page P          auto|letter|legal|a4|max  (default auto)
+  --lossless        disable the scanner's in-transit JPEG compression
+  --keep-alive MIN  idle minutes before the VM stops (default 60)
+  --printer HOST    override the configured scanner for this run
+EOF
+}
+
+case "${1:-}" in
+  feeder)        SOURCE=ADF;     shift ;;
+  bed|flatbed)   SOURCE=Flatbed; shift ;;
+  find)          CMD=find;       shift ;;
+  status)        CMD=status;     shift ;;
+  stop)          CMD=stop;       shift ;;
+  __idle-timer)  idle_timer_run "${2:-60}"; exit 0 ;;
+  -h|--help)     usage; exit 0 ;;
+esac
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --out)        OUT_DIR="$2"; shift 2 ;;
+    --name)       NAME="$2"; shift 2 ;;
+    --dpi)        DPI="$2"; shift 2 ;;
+    --mode)       MODE="$2"; shift 2 ;;
+    --page)       PAGE="$2"; shift 2 ;;
+    --lossless)   LOSSLESS=1; shift ;;
+    --keep-alive) KEEP_ALIVE="$2"; shift 2 ;;
+    --printer)    PRINTER_OVERRIDE="$2"; shift 2 ;;
+    -h|--help)    usage; exit 0 ;;
+    *) die "unknown argument: $1 (try --help)" ;;
+  esac
+done
+
+case "$PAGE" in auto|letter|legal|a4|max) ;; *) die "--page must be auto|letter|legal|a4|max" ;; esac
+case "$MODE" in Color|Gray|Lineart) ;; *) die "--mode must be Color, Gray or Lineart" ;; esac
+
+# ---------------------------------------------------------------------------
+# find
+# ---------------------------------------------------------------------------
+cmd_find() {
+  say "searching for scanners on the network..."
+  local found=0 inst host ip
+  while IFS= read -r inst; do
+    [ -n "$inst" ] || continue
+    found=$((found + 1))
+    host="$(instance_host "$inst")"
+    ip="$([ -n "$host" ] && resolve_ipv4 "$host" || true)"
+    printf '\n  %s\n' "$inst"
+    printf '    model    %s\n' "$(instance_txt "$inst" ty)"
+    printf '    host     %s\n' "${host:-<unresolved>}"
+    printf '    address  %s\n' "${ip:-<unresolved>}"
+    printf '    feeder   %s     flatbed  %s\n' \
+      "$(instance_txt "$inst" feeder)" "$(instance_txt "$inst" flatbed)"
+    printf '\n    to use it:  mkdir -p %s && echo '"'"'PRINTER_HOST=%s'"'"' > %s\n' \
+      "$(dirname "${CONFIG_FILE/#$HOME/~}")" "${host:-unknown}" "${CONFIG_FILE/#$HOME/~}"
+  done <<EOF
+$(discover_instances 5)
+EOF
+  [ "$found" -eq 0 ] && {
+    say ""
+    die "no scanners found. Check the printer is on and on this network."
+  }
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Resolve which scanner to talk to.
+#
+# No guessing: if nothing is configured we stop and explain, even when exactly one
+# scanner is present. Silent auto-selection is the kind of magic that becomes
+# confusing the day a second device appears.
+# ---------------------------------------------------------------------------
+resolve_printer() {
+  local host="" ip=""
+
+  if [ -n "$PRINTER_OVERRIDE" ]; then
+    if is_ipv4 "$PRINTER_OVERRIDE"; then ip="$PRINTER_OVERRIDE"; else host="$PRINTER_OVERRIDE"; fi
+  elif [ -f "$CONFIG_FILE" ]; then
+    # shellcheck disable=SC1090
+    . "$CONFIG_FILE"
+    ip="${PRINTER_IP:-}"
+    host="${PRINTER_HOST:-}"
+  fi
+
+  if [ -z "$ip" ] && [ -z "$host" ]; then
+    die "no scanner configured.
+
+Run:
+    scanner find
+
+then write the result to $CONFIG_FILE, e.g.:
+    mkdir -p $(dirname "$CONFIG_FILE")
+    echo 'PRINTER_HOST=NPIXXXXXX.local' > $CONFIG_FILE"
+  fi
+
+  if [ -z "$ip" ]; then
+    ip="$(resolve_ipv4 "$host" || true)"
+    [ -n "$ip" ] || die "could not resolve '$host' on this network.
+Is the printer on? Run 'scanner find' to see what is reachable."
+  fi
+  printf '%s\n' "$ip"
+}
+
+# HPLIP's own hp-makeuri gives the canonical model string, which beats deriving it
+# from the Bonjour name. Cached per address: it costs an SNMP round trip.
+device_uri() {
+  local ip="$1" cache="$STATE_DIR/uri-$ip" uri
+  if [ -f "$cache" ]; then cat "$cache"; return; fi
+  uri="$(bounded 30 limactl shell "$VM_NAME" hp-makeuri -c "$ip" 2>/dev/null \
+         | grep '^hp:/net/' | head -1)"
+  [ -n "$uri" ] || die "the VM could not identify a scanner at $ip.
+Check the printer is on and reachable from this network."
+  uri="hpaio:${uri#hp:}"
+  mkdir -p "$STATE_DIR"
+  printf '%s\n' "$uri" | tee "$cache"
+}
+
+cmd_status() {
+  require_lima
+  printf 'VM          %s\n' "$(vm_exists && vm_status || echo 'not created')"
+  printf 'config      %s\n' "$([ -f "$CONFIG_FILE" ] && echo "$CONFIG_FILE" || echo 'none -- run: scanner find')"
+  if [ -f "$CONFIG_FILE" ]; then
+    # shellcheck disable=SC1090
+    . "$CONFIG_FILE"
+    printf 'printer     %s\n' "${PRINTER_HOST:-${PRINTER_IP:-unset}}"
+    local ip; ip="$(resolve_printer 2>/dev/null || true)"
+    printf 'address     %s\n' "${ip:-<unresolved>}"
+  fi
+  printf 'output      %s\n' "$OUT_DIR"
+  if timer_running; then
+    printf 'idle timer  running (%ss since last scan)\n' "$(seconds_since_use)"
+  else
+    printf 'idle timer  not running\n'
+  fi
+}
+
+cmd_scan() {
+  local ip uri out summary
+  ip="$(resolve_printer)"
+
+  vm_ensure
+  lock_acquire
+  trap 'lock_release' EXIT
+
+  uri="$(device_uri "$ip")"
+  [ -n "$NAME" ] || NAME="scan-$(date +%Y%m%d%H%M%S)"
+  mkdir -p "$OUT_DIR"
+
+  say "scanning..."
+  summary="$(limactl shell "$VM_NAME" bash -s -- \
+      "$uri" "$SOURCE" "$MODE" "$DPI" "$PAGE" "$LOSSLESS" "$NAME" \
+      < "$ROOT/lib/guest-scan.sh")" \
+    || die "scan failed"
+
+  printf '%s\n' "$summary" | awk '$1=="PAGE" { printf "  %s: %s (measured %sin)\n", $2, $3, $4 }' >&2
+
+  local guest_pdf used pages
+  guest_pdf="$(printf '%s\n' "$summary" | awk '$1=="OUT"    {print $2}')"
+  used="$(     printf '%s\n' "$summary" | awk '$1=="SOURCE" {print $2}')"
+  pages="$(    printf '%s\n' "$summary" | awk '$1=="PAGES"  {print $2}')"
+  [ -n "$guest_pdf" ] || die "the VM produced no output"
+
+  out="$OUT_DIR/$NAME.pdf"
+  limactl copy "$VM_NAME:$guest_pdf" "$out" >/dev/null 2>&1 \
+    || die "could not copy the scan out of the VM"
+
+  lock_release
+  trap - EXIT
+  idle_timer_arm "$KEEP_ALIVE"
+
+  say "$([ "$used" = ADF ] && echo feeder || echo flatbed), $pages page(s)"
+  printf '%s\n' "$out"
+}
+
+case "$CMD" in
+  find)   cmd_find ;;
+  status) cmd_status ;;
+  stop)   require_lima; vm_stop; say "VM stopped" ;;
+  scan)   cmd_scan ;;
+esac

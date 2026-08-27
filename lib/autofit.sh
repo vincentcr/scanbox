@@ -52,18 +52,29 @@ measure)
 
   detected_in=$(awk -v e="$edge" -v r="$res" 'BEGIN{printf "%.2f", e/r}')
 
-  # Snap to a standard size only when the measurement is already within ~4mm of one,
-  # so output is a clean letter/legal/A4 page. Otherwise report the measured length
-  # rather than inventing a size the sheet does not have.
-  snap=$(( res * 15 / 100 ))
+  # Snap to a standard size, else report the measured length rather than inventing a
+  # size the sheet does not have.
+  #
+  # The tolerance is proportional (2.5%), not fixed: the feeder grips and releases
+  # differently on each pass, and the same legal sheet has measured anywhere from
+  # 13.77in to 14.12in across runs. A fixed 4mm window drops those on the floor as
+  # "custom". 2.5% is wide enough for that drift while staying narrower than half
+  # the letter/A4 gap (0.69in), which is the only pair close enough to confuse.
+  best_name=""; best_px=0; best_d=-1
   for spec in "a5:8.27" "letter:11" "a4:11.69" "legal:14"; do
     px=$(awk -v i="${spec##*:}" -v r="$res" 'BEGIN{printf "%d", i*r}')
+    tol=$(( px * 25 / 1000 ))
     d=$(( edge - px )); (( d < 0 )) && d=$(( -d ))
-    if (( d <= snap )); then
-      echo "${spec%%:*} ${px} ${detected_in}"; exit 0
+    # Nearest match wins, not merely the first that fits.
+    if (( d <= tol )) && { (( best_d < 0 )) || (( d < best_d )); }; then
+      best_name="${spec%%:*}"; best_px="$px"; best_d="$d"
     fi
   done
-  echo "custom ${edge} ${detected_in}"
+  if [ -n "$best_name" ]; then
+    echo "${best_name} ${best_px} ${detected_in}"
+  else
+    echo "custom ${edge} ${detected_in}"
+  fi
   ;;
 crop)
   px="$3"

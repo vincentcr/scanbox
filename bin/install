@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Symlink `scanner` onto PATH. A symlink, not a copy, so `git pull` updates it.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+TARGET="${1:-$HOME/.local/bin}"
+
+command -v limactl >/dev/null 2>&1 \
+  || echo "note: lima is not installed yet -- 'brew install lima' before first scan" >&2
+
+mkdir -p "$TARGET"
+ln -sf "$ROOT/bin/scanner" "$TARGET/scanner"
+echo "installed: $TARGET/scanner -> $ROOT/bin/scanner"
+
+case ":$PATH:" in
+  *":$TARGET:"*) ;;
+  *) echo "warning: $TARGET is not on your PATH" >&2 ;;
+esac

@@ -1,0 +1,8 @@
+# Copy to ~/.config/scanbox/config
+#
+# PRINTER_HOST is the scanner's Bonjour name, derived from its MAC address, so it
+# survives DHCP moving the IP. Prefer it. Run `scanner find` to discover it.
+PRINTER_HOST=NPIXXXXXX.local
+
+# Optional: skip mDNS entirely and use a fixed address.
+#PRINTER_IP=192.168.1.50
