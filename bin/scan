@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# Scan from the M276nw straight onto the Mac.
+#
+#   bin/scan                            one flatbed page -> scans/<ts>.png
+#   bin/scan invoice --resolution 600
+#   bin/scan contract --source ADF      feeder -> one multi-page PDF, size auto-detected
+#   bin/scan deed --source ADF --page legal    pin the size instead
+#
+# Options: --source Flatbed|ADF  --mode Color|Gray|Lineart  --resolution DPI
+#          --page auto|letter|legal|a4|max  --format png|jpeg|tiff|pdf
+#          --lossless   turn off the scanner's own JPEG compression
+set -euo pipefail
+VM="${SCANBOX_VM:-scanbox}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+name="${1:-scan-$(date +%Y%m%d-%H%M%S)}"
+[[ $# -gt 0 ]] && shift
+res=300; mode=Color; source=Flatbed; page=auto; format=""; compress=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --resolution) res="$2";    shift 2 ;;
+    --mode)       mode="$2";   shift 2 ;;
+    --source)     source="$2"; shift 2 ;;
+    --page)       page="$2";   shift 2 ;;
+    --format)     format="$2"; shift 2 ;;
+    # The scanner JPEG-compresses before the data ever reaches us -- that is the
+    # only place image quality is actually lost, and no output format undoes it.
+    --lossless)   compress="--compression None"; shift ;;
+    *) echo "unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+
+# The feeder always runs its full 381mm travel and cannot report page length, so
+# `auto` scans the whole bed and then finds the sheet's real trailing edge -- see
+# lib/autofit.sh. Flatbed has no such backing to detect against, so auto leaves it
+# at full size there.
+case "$page" in
+  auto)   height="" ;;
+  letter) height="-y 279.4" ;;
+  legal)  height="-y 355.6" ;;
+  a4)     height="-y 297"   ;;
+  max)    height="" ;;
+  *) echo "--page must be auto|letter|legal|a4|max" >&2; exit 2 ;;
+esac
+[[ "$source" == "ADF" && -z "$height" ]] && height="-y 381"
+
+# A feeder run is normally one document, so default it to a single PDF.
+if [[ -z "$format" ]]; then
+  [[ "$source" == "ADF" ]] && format=pdf || format=png
+fi
+
+autofit=0
+[[ "$page" == "auto" && "$source" == "ADF" ]] && autofit=1
+
+out="scans/${name}.${format}"
+
+limactl shell "$VM" -- bash -c "
+  set -euo pipefail
+  source /etc/scanbox/device.env
+  AF=${ROOT}/lib/autofit.sh
+  tmp=\$(mktemp -d); trap 'rm -rf \"\$tmp\"' EXIT
+
+  if [[ '${source}' == 'ADF' ]]; then
+    # --batch keeps pulling sheets until the feeder reports empty
+    scanimage -d \"\$SCANBOX_DEVICE\" \
+      --source ADF --mode '${mode}' --resolution '${res}' ${height} ${compress} \
+      --format=png --batch=\"\$tmp/p%04d.png\" 2>&1 \
+      | grep -vE '^Progress|^Scanning page|^Scanned page|^Batch terminated' || true
+    shopt -s nullglob
+    pages=(\"\$tmp\"/p*.png)
+    (( \${#pages[@]} )) || { echo 'no pages scanned -- is the feeder loaded?' >&2; exit 1; }
+    for f in \"\${pages[@]}\"; do
+      if [[ ${autofit} -eq 1 ]]; then
+        read -r nm px det < <(bash \"\$AF\" measure \"\$f\" '${res}')
+        bash \"\$AF\" crop \"\$f\" \"\$px\"
+        printf '  %s: %s (measured %sin)\n' \"\$(basename \$f .png)\" \"\$nm\" \"\$det\"
+      fi
+    done
+    if [[ '${format}' == 'pdf' ]]; then
+      convert \"\${pages[@]}\" -quality 88 '${ROOT}/${out}'
+    elif (( \${#pages[@]} == 1 )); then
+      convert \"\${pages[0]}\" '${ROOT}/${out}'
+    else
+      i=1; for f in \"\${pages[@]}\"; do
+        convert \"\$f\" \"${ROOT}/scans/${name}-p\${i}.${format}\"; i=\$((i+1)); done
+      rm -f '${ROOT}/${out}'
+    fi
+  else
+    scanimage -d \"\$SCANBOX_DEVICE\" \
+      --source Flatbed --mode '${mode}' --resolution '${res}' ${height} ${compress} \
+      --format='${format}' -o '${ROOT}/${out}'
+  fi
+"
+
+cd "$ROOT"
+for f in "scans/${name}."* "scans/${name}-p"*; do
+  [[ -e "$f" ]] && echo "$f  ($(du -h "$f" | cut -f1))"
+done 2>/dev/null | sort -u

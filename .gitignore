@@ -1,0 +1,8 @@
+# Scans are personal documents -- never commit them.
+scans/*
+!scans/.gitkeep
+
+# User config: printer address differs per machine and network.
+printer.env
+
+.DS_Store

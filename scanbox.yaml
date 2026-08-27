@@ -1,0 +1,33 @@
+# Debian VM that gives an HP LaserJet Pro 200 color MFP M276nw its scanner back.
+#
+# The printer predates eSCL/AirScan, so macOS can no longer talk to it. HPLIP's
+# hpaio backend still speaks HP's proprietary SOAP scan protocol (TCP 8289), so
+# we run that inside Linux.
+#
+# This file defines the VM only. Software setup lives in provision/ and is
+# applied by bin/setup, so it can be re-run without rebuilding the VM.
+#
+#   limactl start --name=scanbox ./scanbox.yaml
+
+# Only the image defaults. Deliberately NOT template:_default/mounts -- that
+# mounts ~ read-only, which shadows the writable project mount below.
+base:
+  - template:_images/debian-13
+
+vmType: vz
+arch: aarch64
+
+cpus: 2
+memory: "2GiB"
+disk: "16GiB"
+
+# vzNAT puts the guest on the host's 192.168.64.0/24 vmnet, so the Mac can reach
+# AirSane directly rather than through port forwards. Outbound NAT still lets the
+# guest reach the printer on the physical LAN.
+networks:
+  - vzNAT: true
+
+
+mounts:
+  - location: "~/devel/scanbox"
+    writable: true
