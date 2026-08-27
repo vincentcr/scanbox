@@ -32,7 +32,15 @@ esac
 adf_height="$height"
 [ -z "$adf_height" ] && adf_height="-y 381"
 
-page_count() { ls "$tmp"/p*.png 2>/dev/null | wc -l | tr -d ' '; }
+# Count without `ls`: an unmatched glob makes ls exit 2, which under `set -o
+# pipefail` propagates and kills the script via `set -e` -- silently, before any
+# "nothing was scanned" message can be printed. Zero pages is a normal outcome
+# here (an empty feeder), not an error.
+page_count() {
+  local c=0 f
+  for f in "$tmp"/p*.png; do [ -e "$f" ] && c=$((c + 1)); done
+  echo "$c"
+}
 
 scan_adf() {
   # --batch keeps pulling sheets until the feeder reports empty. An empty feeder
@@ -66,9 +74,27 @@ esac
 
 n=$(page_count)
 if [ "$n" -eq 0 ]; then
-  sed 's/^/  /' "$tmp/adf.err" >&2 2>/dev/null || true
-  echo "no pages were scanned" >&2
+  if grep -q "out of documents" "$tmp/adf.err" 2>/dev/null; then
+    echo "the document feeder is empty -- load it, or use 'scanner bed'" >&2
+  else
+    sed 's/^/    /' "$tmp/adf.err" >&2 2>/dev/null || true
+    echo "no pages were scanned" >&2
+  fi
   exit 1
+fi
+
+# A feeder batch has exactly one healthy ending: the feeder reports it is out of
+# documents. Anything else -- a jam, a mis-feed, an I/O error partway through --
+# leaves a batch that stopped early. Without this check that is indistinguishable
+# from success and quietly yields a short PDF, which is how you lose a page and
+# never find out.
+if [ "$used" = "ADF" ] && ! grep -q "out of documents" "$tmp/adf.err" 2>/dev/null; then
+  echo "TRUNCATED $n"
+  {
+    echo "the feeder stopped before reporting it was empty, after $n page(s)."
+    echo "scanner kept what it got, but sheets may be missing. scanimage said:"
+    sed 's/^/    /' "$tmp/adf.err" 2>/dev/null | tail -5
+  } >&2
 fi
 
 # Size each sheet from its own trailing edge. ADF only -- the flatbed has no

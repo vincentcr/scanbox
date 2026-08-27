@@ -189,10 +189,19 @@ cmd_scan() {
   mkdir -p "$OUT_DIR"
 
   say "scanning..."
-  summary="$(limactl shell "$VM_NAME" bash -s -- \
-      "$uri" "$SOURCE" "$MODE" "$DPI" "$PAGE" "$LOSSLESS" "$NAME" \
-      < "$ROOT/lib/guest-scan.sh")" \
-    || die "scan failed"
+  # Keep the guest's stderr: it carries the reason a scan failed ("the feeder is
+  # empty") and any truncation detail. Swallowing it leaves a bare "scan failed",
+  # which tells you nothing about what to do next.
+  local errf; errf="$(mktemp -t scanner)"
+  if ! summary="$(limactl shell "$VM_NAME" bash -s -- \
+        "$uri" "$SOURCE" "$MODE" "$DPI" "$PAGE" "$LOSSLESS" "$NAME" \
+        < "$ROOT/lib/guest-scan.sh" 2>"$errf")"; then
+    sed 's/^/  /' "$errf" >&2
+    rm -f "$errf"
+    die "scan failed"
+  fi
+  [ -s "$errf" ] && sed 's/^/  /' "$errf" >&2
+  rm -f "$errf"
 
   printf '%s\n' "$summary" | awk '$1=="PAGE" { printf "  %s: %s (measured %sin)\n", $2, $3, $4 }' >&2
 
@@ -211,6 +220,12 @@ cmd_scan() {
   idle_timer_arm "$KEEP_ALIVE"
 
   say "$([ "$used" = ADF ] && echo feeder || echo flatbed), $pages page(s)"
+  # Never let a short batch look like a clean run.
+  if printf '%s\n' "$summary" | grep -q '^TRUNCATED '; then
+    say ""
+    say "WARNING: the feeder stopped early -- this scan may be missing pages."
+    say "         Check the page count above against what you loaded."
+  fi
   printf '%s\n' "$out"
 }
 
