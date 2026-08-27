@@ -1,5 +1,9 @@
 #!/bin/bash
-# Base packages: HPLIP + SANE + the bits AirSane needs to build.
+# Base packages. Deliberately minimal: this VM exists only to run HPLIP's hpaio
+# backend and turn the result into a PDF.
+#
+# cups arrives whether we want it or not -- hplip hard-depends on it -- but nothing
+# here configures a print queue or enables the service.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
@@ -13,15 +17,14 @@ done
 apt-get update -qq
 apt-get install -y --no-install-recommends \
   hplip libsane-hpaio sane-utils \
-  avahi-daemon avahi-utils libavahi-client-dev \
-  build-essential cmake git pkg-config \
-  libsane-dev libjpeg-dev libpng-dev libusb-1.0-0-dev \
-  imagemagick poppler-utils ca-certificates curl
+  imagemagick poppler-utils \
+  ca-certificates curl
 
-# hpaio is what actually speaks to the M276nw; make sure SANE loads it.
+# hpaio is what actually speaks to the scanner; make sure SANE loads it.
 grep -qx hpaio /etc/sane.d/dll.conf || echo hpaio >> /etc/sane.d/dll.conf
 
-# HPLIP is fussy about this; wrong perms here silently break scanning.
+# HPLIP is fussy about this; wrong perms here break scanning in a way that is hard
+# to diagnose.
 install -d -m 755 -o root -g root /var/lib/hp
 
 echo "10-packages: done"
