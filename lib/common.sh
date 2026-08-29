@@ -32,28 +32,39 @@ spinner_start() {
   # Not a terminal (piped, CI): print one plain line instead of animating.
   if [ ! -t 2 ]; then printf '%s...\n' "$msg" >&2; return 0; fi
   printf '\033[?25l' >&2                       # hide cursor
+  # $$ stays the main shell's pid even inside a subshell, which is exactly the
+  # anchor we need: spinners are sometimes started from within $( ), where
+  # SPINNER_PID lands in that subshell and the top-level trap cannot reach it.
+  # Watching the main shell means the spinner cleans itself up regardless.
+  local anchor=$$
   (
+    # Background jobs of a non-interactive shell inherit SIGINT ignored, so
+    # without this Ctrl-C leaves the spinner drawing over the user's prompt.
+    trap 'exit 0' INT TERM HUP
     frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
     i=0
-    while :; do
+    while kill -0 "$anchor" 2>/dev/null; do
       i=$(( (i + 1) % ${#frames[@]} ))
       printf '\r  %s %s ' "${frames[$i]}" "$msg" >&2
       sleep 0.1
     done
-  ) >/dev/null 2>&2 &
+  ) >/dev/null &
   SPINNER_PID=$!
 }
 
 # Clear the line and restore the cursor. Safe to call when nothing is running.
 spinner_stop() {
-  # Only emit the clear/show-cursor sequence if something was actually spinning,
-  # so the EXIT trap does not spray escape codes on every ordinary exit.
+  # Clearing the line is only right if something was drawn on it, but restoring
+  # the cursor must be unconditional: a spinner started inside $( ) hid the
+  # cursor from a subshell we can no longer see, and leaving a terminal with no
+  # cursor is a nasty thing to do to someone.
   if [ -n "$SPINNER_PID" ]; then
     kill "$SPINNER_PID" 2>/dev/null || true
     wait "$SPINNER_PID" 2>/dev/null || true
     SPINNER_PID=""
-    [ -t 2 ] && printf '\r\033[K\033[?25h' >&2
+    [ -t 2 ] && printf '\r\033[K' >&2
   fi
+  [ -t 2 ] && printf '\033[?25h' >&2
   return 0
 }
 

@@ -23,10 +23,15 @@ ROOT="$(cd -P "$(dirname "$_src")/.." && pwd)"
 # One cleanup path for the whole run: the spinner must never leave the cursor
 # hidden or a half-drawn line behind, including on Ctrl-C.
 cleanup() { spinner_stop; lock_release; }
-trap cleanup EXIT INT TERM
+# INT/TERM must actually terminate. A handler that only tidies up leaves the
+# script running after Ctrl-C, which is not what anyone means by it.
+on_signal() { cleanup; exit 130; }
+trap cleanup EXIT
+trap on_signal INT TERM
 
 OUT_DIR="${SCANBOX_OUT:-$HOME/Pictures/Scans}"
 NAME=""; DPI=300; MODE=Color; PAGE=auto; LOSSLESS=0; KEEP_ALIVE=60; PRINTER_OVERRIDE=""
+SETUP_OVERWRITE=0; SETUP_HOST=""
 SOURCE=auto
 CMD=""
 
@@ -38,9 +43,13 @@ scanbox -- scan from the network MFP
                             auto    the feeder if loaded, else the bed (default)
                             feeder  force the document feeder
                             bed     force the flatbed
-  scanbox find            discover scanners on the network
+  scanbox setup           find a scanner and save it as your config
   scanbox status          VM state, config, resolved printer
   scanbox stop            stop the VM now
+
+Options (for setup)
+  --host=NAME       skip discovery and use this scanner
+  --overwrite       replace an existing config without asking
 
 Options (for scan)
   --out DIR         where PDFs land        (default ~/Pictures/Scans)
@@ -67,7 +76,7 @@ case "${1:-}" in
       ""|-*)       SOURCE=auto ;;          # omitted, or options follow directly
       *) die "scan takes auto, feeder or bed (got '$1')" ;;
     esac ;;
-  find)          CMD=find;       shift ;;
+  setup)         CMD=setup;      shift ;;
   status)        CMD=status;     shift ;;
   stop)          CMD=stop;       shift ;;
   __idle-timer)  idle_timer_run "${2:-60}"; exit 0 ;;
@@ -85,6 +94,9 @@ while [ $# -gt 0 ]; do
     --lossless)   LOSSLESS=1; shift ;;
     --keep-alive) KEEP_ALIVE="$2"; shift 2 ;;
     --printer)    PRINTER_OVERRIDE="$2"; shift 2 ;;
+    --overwrite)  SETUP_OVERWRITE=1; shift ;;
+    --host)       SETUP_HOST="$2"; shift 2 ;;
+    --host=*)     SETUP_HOST="${1#--host=}"; shift ;;
     -h|--help)    usage; exit 0 ;;
     *) die "unknown argument: $1 (try --help)" ;;
   esac
@@ -96,41 +108,131 @@ case "$MODE" in Color|Gray|Lineart) ;; *) die "--mode must be Color, Gray or Lin
 # ---------------------------------------------------------------------------
 # find
 # ---------------------------------------------------------------------------
-cmd_find() {
-  # Collect first, then render: the spinner and the results must not share the
-  # terminal, and each instance costs a couple of seconds to resolve.
-  spinner_start "searching for scanners on the network"
-  local list; list="$(discover_instances 5)"
-  spinner_stop
+# Ask a yes/no question on the terminal. Reads /dev/tty rather than stdin so it
+# still works when output is being piped somewhere.
+# /dev/tty passes a -r test on permissions even with no controlling terminal, so
+# actually opening it is the only reliable check. Done in a subshell to avoid
+# leaking a file descriptor.
+tty_readable() { ( exec 3</dev/tty ) 2>/dev/null; }
 
-  local found=0 inst host ip
-  while IFS= read -r inst; do
-    [ -n "$inst" ] || continue
-    found=$((found + 1))
-    spinner_start "resolving $inst"
-    host="$(instance_host "$inst")"
-    ip="$([ -n "$host" ] && resolve_ipv4 "$host" || true)"
-    local model feeder flatbed
-    model="$(instance_txt "$inst" ty)"
-    feeder="$(instance_txt "$inst" feeder)"
-    flatbed="$(instance_txt "$inst" flatbed)"
+confirm() {
+  local prompt="$1" reply
+  if ! tty_readable; then
+    die "$prompt -- but there is no terminal to ask on. Pass --overwrite."
+  fi
+  printf '%s [y/N] ' "$prompt" >&2
+  read -r reply < /dev/tty || reply=""
+  case "$reply" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
+}
+
+cmd_setup() {
+  local host=""
+
+  # 1. An existing config is confirmed before anything else happens, so a
+  #    mistyped `setup` cannot cost you a working configuration. Nothing is
+  #    written until the very end regardless.
+  if [ -f "$CONFIG_FILE" ] && [ "$SETUP_OVERWRITE" -eq 0 ]; then
+    say "This is already configured, at ${CONFIG_FILE/#$HOME/~}:"
+    say ""
+    sed 's/^/    /' "$CONFIG_FILE" >&2
+    say ""
+    confirm "Replace it?" || die "setup cancelled -- nothing was changed."
+    say ""
+  fi
+
+  if [ -n "$SETUP_HOST" ]; then
+    host="$SETUP_HOST"
+  else
+    # 2. Discover, then let the user pick.
+    spinner_start "searching for scanners on the network"
+    local list; list="$(discover_instances 5)"
     spinner_stop
 
-    printf '\n  %s\n' "$inst"
-    printf '    model    %s\n' "$model"
-    printf '    host     %s\n' "${host:-<unresolved>}"
-    printf '    address  %s\n' "${ip:-<unresolved>}"
-    printf '    feeder   %s     flatbed  %s\n' "$feeder" "$flatbed"
-    printf '\n    to use it:  mkdir -p %s && echo '"'"'PRINTER_HOST=%s'"'"' > %s\n' \
-      "$(dirname "${CONFIG_FILE/#$HOME/~}")" "${host:-unknown}" "${CONFIG_FILE/#$HOME/~}"
-  done <<EOF
+    local insts=() hosts=() models=() feeders=()
+    local inst h m f
+    while IFS= read -r inst; do
+      [ -n "$inst" ] || continue
+      spinner_start "resolving $inst"
+      h="$(instance_host "$inst")"
+      m="$(instance_txt "$inst" ty)"
+      f="$(instance_txt "$inst" feeder)"
+      spinner_stop
+      insts+=("$inst"); hosts+=("$h"); models+=("$m"); feeders+=("$f")
+    done <<EOF
 $list
 EOF
 
-  [ "$found" -eq 0 ] && {
-    die "no scanners found. Check the printer is on and on this network."
-  }
-  return 0
+    local n=${#insts[@]}
+    [ "$n" -gt 0 ] || die "no scanners found on this network.
+Check the printer is switched on and on the same network as this Mac."
+
+    say "Found $n scanner$([ "$n" -eq 1 ] || echo s):"
+    say ""
+    local i=0
+    while [ "$i" -lt "$n" ]; do
+      printf '  %d) %s\n' "$((i + 1))" "${models[$i]:-${insts[$i]}}" >&2
+      printf '     %s%s\n' "${hosts[$i]:-<unresolved>}" \
+        "$([ "${feeders[$i]}" = "T" ] && echo "  (has a document feeder)")" >&2
+      i=$((i + 1))
+    done
+    say ""
+
+    local choice=""
+    if ! tty_readable; then
+      die "no terminal to choose on. Re-run with --host=<hostname>."
+    fi
+    while :; do
+      if [ "$n" -eq 1 ]; then
+        printf 'Which one? [1] ' >&2
+      else
+        printf 'Which one? [1-%d] ' "$n" >&2
+      fi
+      read -r choice < /dev/tty || choice=""
+      # A lone Enter takes the only candidate, but never guesses between several.
+      [ -z "$choice" ] && [ "$n" -eq 1 ] && choice=1
+      case "$choice" in
+        ''|*[!0-9]*) ;;
+        *) [ "$choice" -ge 1 ] && [ "$choice" -le "$n" ] && break ;;
+      esac
+      say "  please enter a number between 1 and $n"
+    done
+    host="${hosts[$((choice - 1))]}"
+    [ -n "$host" ] || die "that scanner did not resolve to a hostname; re-run with --host=<hostname>."
+    say ""
+  fi
+
+  # Confirm it is actually reachable, but do not refuse to save if it is not --
+  # setting this up while away from the printer's network is legitimate.
+  local ip
+  spinner_start "checking $host"
+  ip="$(resolve_ipv4 "$host" || true)"
+  spinner_stop
+  if [ -n "$ip" ]; then
+    say "$host resolves to $ip"
+  else
+    warn "note: $host does not resolve from here. Saving anyway -- it should work
+      once you are back on the printer's network."
+  fi
+
+  # 3. Only now is anything written, and via a temp file so an interrupted write
+  #    cannot leave a half-written config behind.
+  local dir tmp
+  dir="$(dirname "$CONFIG_FILE")"
+  mkdir -p "$dir"
+  tmp="$(mktemp -t scanbox-config)"
+  cat > "$tmp" <<EOF
+# Written by \`scanbox setup\`.
+#
+# The Bonjour name is derived from the printer's MAC address, so it survives
+# DHCP moving the IP. Prefer it over a fixed address.
+PRINTER_HOST=$host
+EOF
+  mv "$tmp" "$CONFIG_FILE"
+
+  say ""
+  say "Saved to ${CONFIG_FILE/#$HOME/~}. Scan with:"
+  say ""
+  say "    scanbox scan"
 }
 
 # ---------------------------------------------------------------------------
@@ -153,14 +255,9 @@ resolve_printer() {
   fi
 
   if [ -z "$ip" ] && [ -z "$host" ]; then
-    die "no scanner configured.
+    die "no scanner configured yet. Run:
 
-Run:
-    scanbox find
-
-then write the result to $CONFIG_FILE, e.g.:
-    mkdir -p $(dirname "$CONFIG_FILE")
-    echo 'PRINTER_HOST=NPIXXXXXX.local' > $CONFIG_FILE"
+    scanbox setup"
   fi
 
   if [ -z "$ip" ]; then
@@ -193,7 +290,7 @@ Check the printer is on and reachable from this network."
 cmd_status() {
   require_lima
   printf 'VM          %s\n' "$(vm_exists && vm_status || echo 'not created')"
-  printf 'config      %s\n' "$([ -f "$CONFIG_FILE" ] && echo "$CONFIG_FILE" || echo 'none -- run: scanbox find')"
+  printf 'config      %s\n' "$([ -f "$CONFIG_FILE" ] && echo "$CONFIG_FILE" || echo 'none -- run: scanbox setup')"
   if [ -f "$CONFIG_FILE" ]; then
     # shellcheck disable=SC1090
     . "$CONFIG_FILE"
@@ -214,7 +311,7 @@ cmd_status() {
 cmd_scan() {
   local ip uri out summary
   ip="$(resolve_printer)" || die "could not reach the configured scanner.
-Is the printer on, and are you on its network? Run 'scanbox find' to see what is reachable."
+Is the printer on, and are you on its network? Run 'scanbox setup' to look again."
 
   vm_ensure
   lock_acquire
@@ -268,7 +365,7 @@ Is the printer on, and are you on its network? Run 'scanbox find' to see what is
 }
 
 case "$CMD" in
-  find)   cmd_find ;;
+  setup)  cmd_setup ;;
   status) cmd_status ;;
   stop)   require_lima; vm_stop; say "VM stopped" ;;
   scan)   cmd_scan ;;
