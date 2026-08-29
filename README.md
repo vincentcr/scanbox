@@ -53,10 +53,19 @@ Intel Macs should work (Lima supports both) but are likewise untested.
 ## Install
 
 ```sh
-brew install lima          # prerequisite; scanner reports it, never installs it
+brew tap vincentcr/scanbox
+brew trust vincentcr/scanbox   # Homebrew 6+ gates third-party taps
+brew install scanbox           # pulls in lima
+scanner find                   # discover the scanner, then save it as shown
+```
+
+Or without Homebrew:
+
+```sh
+brew install lima          # the one prerequisite; scanner reports it, never installs it
 git clone https://github.com/vincentcr/scanbox && cd scanbox
 ./bin/install              # symlinks scanner into ~/.local/bin
-scanner find               # discover the scanner, then save it as shown
+scanner find
 ```
 
 `scanner find` prints the exact command to write your config.
