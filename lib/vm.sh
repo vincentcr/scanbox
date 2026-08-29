@@ -82,8 +82,9 @@ vm_ensure() {
       lima_quiet limactl start "$VM_NAME" --tty=false || die "could not restart the VM"
     fi
   else
-    say "starting the scanbox VM (~26s)"
+    spinner_start "starting the scanbox VM (~26s)"
     lima_quiet limactl start "$VM_NAME" --tty=false || die "could not start the VM"
+    spinner_stop
   fi
 
   if vm_is_provisioned; then

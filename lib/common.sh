@@ -11,6 +11,55 @@ say()  { printf '%s\n' "$*" >&2; }
 warn() { printf 'scanbox: %s\n' "$*" >&2; }
 die()  { printf 'scanbox: %s\n' "$*" >&2; exit 1; }
 
+# ---------------------------------------------------------------------------
+# Progress spinner.
+#
+# Several steps here are slow with nothing to show for it -- resolving a printer
+# that is not on this network burns 6s, and hp-makeuri can sit for 30 -- and
+# silence is indistinguishable from a hang.
+#
+# The spinner writes to stderr only, so stdout stays the machine-readable result.
+# Its subshell's stdout MUST go to /dev/null: several callers run inside $(...),
+# and a background job holding that pipe open would keep the command substitution
+# waiting forever -- causing exactly the hang this is meant to dispel.
+# ---------------------------------------------------------------------------
+
+SPINNER_PID=""
+
+spinner_start() {
+  local msg="$1"
+  spinner_stop
+  # Not a terminal (piped, CI): print one plain line instead of animating.
+  if [ ! -t 2 ]; then printf '%s...\n' "$msg" >&2; return 0; fi
+  printf '\033[?25l' >&2                       # hide cursor
+  (
+    frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+    i=0
+    while :; do
+      i=$(( (i + 1) % ${#frames[@]} ))
+      printf '\r  %s %s ' "${frames[$i]}" "$msg" >&2
+      sleep 0.1
+    done
+  ) >/dev/null 2>&2 &
+  SPINNER_PID=$!
+}
+
+# Clear the line and restore the cursor. Safe to call when nothing is running.
+spinner_stop() {
+  # Only emit the clear/show-cursor sequence if something was actually spinning,
+  # so the EXIT trap does not spray escape codes on every ordinary exit.
+  if [ -n "$SPINNER_PID" ]; then
+    kill "$SPINNER_PID" 2>/dev/null || true
+    wait "$SPINNER_PID" 2>/dev/null || true
+    SPINNER_PID=""
+    [ -t 2 ] && printf '\r\033[K\033[?25h' >&2
+  fi
+  return 0
+}
+
+# Report how a spun step ended, on its own line.
+spinner_done() { spinner_stop; [ -n "${1:-}" ] && say "$1"; return 0; }
+
 # macOS has no `timeout`, so perl provides it. Note perl must *stay* as the parent
 # and reap the child rather than exec'ing into it: an exec'd process killed by
 # SIGALRM makes the calling shell print "Alarm clock: 14" job-control noise, and
@@ -71,7 +120,15 @@ lock_acquire() {
   echo $$ > "$LOCK_DIR/pid"
 }
 
-lock_release() { rm -rf "$LOCK_DIR"; }
+# Only ever release a lock we actually hold. A blanket rm would let a cleanup trap
+# in one process delete the lock another process is scanning under.
+lock_release() {
+  [ -d "$LOCK_DIR" ] || return 0
+  local owner
+  owner=$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "")
+  [ "$owner" = "$$" ] || return 0
+  rm -rf "$LOCK_DIR"
+}
 
 lock_held() { [ -d "$LOCK_DIR" ]; }
 

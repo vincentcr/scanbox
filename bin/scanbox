@@ -20,6 +20,11 @@ ROOT="$(cd -P "$(dirname "$_src")/.." && pwd)"
 . "$ROOT/lib/discover.sh"
 . "$ROOT/lib/vm.sh"
 
+# One cleanup path for the whole run: the spinner must never leave the cursor
+# hidden or a half-drawn line behind, including on Ctrl-C.
+cleanup() { spinner_stop; lock_release; }
+trap cleanup EXIT INT TERM
+
 OUT_DIR="${SCANBOX_OUT:-$HOME/Pictures/Scans}"
 NAME=""; DPI=300; MODE=Color; PAGE=auto; LOSSLESS=0; KEEP_ALIVE=60; PRINTER_OVERRIDE=""
 SOURCE=auto
@@ -80,26 +85,37 @@ case "$MODE" in Color|Gray|Lineart) ;; *) die "--mode must be Color, Gray or Lin
 # find
 # ---------------------------------------------------------------------------
 cmd_find() {
-  say "searching for scanners on the network..."
+  # Collect first, then render: the spinner and the results must not share the
+  # terminal, and each instance costs a couple of seconds to resolve.
+  spinner_start "searching for scanners on the network"
+  local list; list="$(discover_instances 5)"
+  spinner_stop
+
   local found=0 inst host ip
   while IFS= read -r inst; do
     [ -n "$inst" ] || continue
     found=$((found + 1))
+    spinner_start "resolving $inst"
     host="$(instance_host "$inst")"
     ip="$([ -n "$host" ] && resolve_ipv4 "$host" || true)"
+    local model feeder flatbed
+    model="$(instance_txt "$inst" ty)"
+    feeder="$(instance_txt "$inst" feeder)"
+    flatbed="$(instance_txt "$inst" flatbed)"
+    spinner_stop
+
     printf '\n  %s\n' "$inst"
-    printf '    model    %s\n' "$(instance_txt "$inst" ty)"
+    printf '    model    %s\n' "$model"
     printf '    host     %s\n' "${host:-<unresolved>}"
     printf '    address  %s\n' "${ip:-<unresolved>}"
-    printf '    feeder   %s     flatbed  %s\n' \
-      "$(instance_txt "$inst" feeder)" "$(instance_txt "$inst" flatbed)"
+    printf '    feeder   %s     flatbed  %s\n' "$feeder" "$flatbed"
     printf '\n    to use it:  mkdir -p %s && echo '"'"'PRINTER_HOST=%s'"'"' > %s\n' \
       "$(dirname "${CONFIG_FILE/#$HOME/~}")" "${host:-unknown}" "${CONFIG_FILE/#$HOME/~}"
   done <<EOF
-$(discover_instances 5)
+$list
 EOF
+
   [ "$found" -eq 0 ] && {
-    say ""
     die "no scanners found. Check the printer is on and on this network."
   }
   return 0
@@ -136,9 +152,11 @@ then write the result to $CONFIG_FILE, e.g.:
   fi
 
   if [ -z "$ip" ]; then
+    # The slowest silent step by far when the printer is not on this network.
+    spinner_start "looking up $host"
     ip="$(resolve_ipv4 "$host" || true)"
-    [ -n "$ip" ] || die "could not resolve '$host' on this network.
-Is the printer on? Run 'scanbox find' to see what is reachable."
+    spinner_stop
+    [ -n "$ip" ] || return 1
   fi
   printf '%s\n' "$ip"
 }
@@ -148,8 +166,11 @@ Is the printer on? Run 'scanbox find' to see what is reachable."
 device_uri() {
   local ip="$1" cache="$STATE_DIR/uri-$ip" uri
   if [ -f "$cache" ]; then cat "$cache"; return; fi
+  # An SNMP round trip; sits for the full timeout if the printer is unreachable.
+  spinner_start "identifying the scanner at $ip"
   uri="$(bounded 30 limactl shell "$VM_NAME" hp-makeuri -c "$ip" 2>/dev/null \
          | grep '^hp:/net/' | head -1)"
+  spinner_stop
   [ -n "$uri" ] || die "the VM could not identify a scanner at $ip.
 Check the printer is on and reachable from this network."
   uri="hpaio:${uri#hp:}"
@@ -165,8 +186,10 @@ cmd_status() {
     # shellcheck disable=SC1090
     . "$CONFIG_FILE"
     printf 'printer     %s\n' "${PRINTER_HOST:-${PRINTER_IP:-unset}}"
-    local ip; ip="$(resolve_printer 2>/dev/null || true)"
-    printf 'address     %s\n' "${ip:-<unresolved>}"
+    # Not being able to resolve is a normal thing for status to report, not a
+    # reason to abort before printing the rest.
+    local ip; ip="$(resolve_printer)" || ip=""
+    printf 'address     %s\n' "${ip:-<unresolved> (not on this network?)}"
   fi
   printf 'output      %s\n' "$OUT_DIR"
   if timer_running; then
@@ -178,17 +201,17 @@ cmd_status() {
 
 cmd_scan() {
   local ip uri out summary
-  ip="$(resolve_printer)"
+  ip="$(resolve_printer)" || die "could not reach the configured scanner.
+Is the printer on, and are you on its network? Run 'scanbox find' to see what is reachable."
 
   vm_ensure
   lock_acquire
-  trap 'lock_release' EXIT
 
   uri="$(device_uri "$ip")"
   [ -n "$NAME" ] || NAME="scan-$(date +%Y%m%d%H%M%S)"
   mkdir -p "$OUT_DIR"
 
-  say "scanning..."
+  spinner_start "scanning"
   # Keep the guest's stderr: it carries the reason a scan failed ("the feeder is
   # empty") and any truncation detail. Swallowing it leaves a bare "scan failed",
   # which tells you nothing about what to do next.
@@ -196,10 +219,12 @@ cmd_scan() {
   if ! summary="$(limactl shell "$VM_NAME" bash -s -- \
         "$uri" "$SOURCE" "$MODE" "$DPI" "$PAGE" "$LOSSLESS" "$NAME" \
         < "$ROOT/lib/guest-scan.sh" 2>"$errf")"; then
+    spinner_stop
     sed 's/^/  /' "$errf" >&2
     rm -f "$errf"
     die "scan failed"
   fi
+  spinner_stop
   [ -s "$errf" ] && sed 's/^/  /' "$errf" >&2
   rm -f "$errf"
 
@@ -212,11 +237,12 @@ cmd_scan() {
   [ -n "$guest_pdf" ] || die "the VM produced no output"
 
   out="$OUT_DIR/$NAME.pdf"
+  spinner_start "saving"
   limactl copy "$VM_NAME:$guest_pdf" "$out" >/dev/null 2>&1 \
     || die "could not copy the scan out of the VM"
+  spinner_stop
 
   lock_release
-  trap - EXIT
   idle_timer_arm "$KEEP_ALIVE"
 
   say "$([ "$used" = ADF ] && echo feeder || echo flatbed), $pages page(s)"
