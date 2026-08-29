@@ -56,7 +56,7 @@ Intel Macs should work (Lima supports both) but are likewise untested.
 brew tap vincentcr/scanbox
 brew trust vincentcr/scanbox   # Homebrew 6+ gates third-party taps
 brew install scanbox           # pulls in lima
-scanbox find                   # discover the scanner, then save it as shown
+scanbox setup                  # find your scanner and save it
 ```
 
 Or without Homebrew:
@@ -65,10 +65,13 @@ Or without Homebrew:
 brew install lima          # the one prerequisite; scanbox reports it, never installs it
 git clone https://github.com/vincentcr/scanbox && cd scanbox
 ./bin/install              # symlinks scanbox into ~/.local/bin
-scanbox find
+scanbox setup
 ```
 
-`scanbox find` prints the exact command to write your config.
+`scanbox setup` lists the scanners it finds and writes your choice to
+`~/.config/scanbox/config`. It confirms before replacing an existing config, and
+nothing is written until the whole flow completes. `--host=NAME` skips discovery;
+`--overwrite` skips the confirmation.
 
 ## Use
 
@@ -76,7 +79,7 @@ scanbox find
 scanbox scan                   # feeder if loaded, else the bed
 scanbox scan feeder            # force the document feeder
 scanbox scan bed               # force the flatbed
-scanbox find                   # discover scanners on the network
+scanbox setup                  # find a scanner and save it as your config
 scanbox status                 # VM state, config, resolved address
 scanbox stop                   # stop the VM now
 ```
