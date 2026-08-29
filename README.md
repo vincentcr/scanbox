@@ -73,13 +73,16 @@ scanbox find
 ## Use
 
 ```sh
-scanbox                        # scan whatever is loaded: feeder if present, else bed
-scanbox feeder                 # force the document feeder
-scanbox bed                    # force the flatbed
+scanbox scan                   # feeder if loaded, else the bed
+scanbox scan feeder            # force the document feeder
+scanbox scan bed               # force the flatbed
 scanbox find                   # discover scanners on the network
 scanbox status                 # VM state, config, resolved address
 scanbox stop                   # stop the VM now
 ```
+
+Running `scanbox` with no arguments prints help. Scanning moves paper, so it needs
+the explicit `scan` verb rather than being the default action.
 
 PDFs land in `~/Pictures/Scans/scan-YYYYMMDDHHMMSS.pdf`.
 

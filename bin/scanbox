@@ -28,20 +28,21 @@ trap cleanup EXIT INT TERM
 OUT_DIR="${SCANBOX_OUT:-$HOME/Pictures/Scans}"
 NAME=""; DPI=300; MODE=Color; PAGE=auto; LOSSLESS=0; KEEP_ALIVE=60; PRINTER_OVERRIDE=""
 SOURCE=auto
-CMD=scan
+CMD=""
 
 usage() {
   cat <<'EOF'
 scanbox -- scan from the network MFP
 
-  scanbox                 scan whatever is loaded (feeder if present, else the bed)
-  scanbox feeder          force the document feeder
-  scanbox bed             force the flatbed
+  scanbox scan [SOURCE]   scan, where SOURCE is one of:
+                            auto    the feeder if loaded, else the bed (default)
+                            feeder  force the document feeder
+                            bed     force the flatbed
   scanbox find            discover scanners on the network
   scanbox status          VM state, config, resolved printer
   scanbox stop            stop the VM now
 
-Options
+Options (for scan)
   --out DIR         where PDFs land        (default ~/Pictures/Scans)
   --name NAME       base filename          (default scan-YYYYMMDDHHMMSS)
   --dpi N           resolution             (default 300; 75..1200)
@@ -53,14 +54,25 @@ Options
 EOF
 }
 
+# Scanning moves paper, so it needs an explicit verb rather than being what you
+# get for running the command with no arguments.
 case "${1:-}" in
-  feeder)        SOURCE=ADF;     shift ;;
-  bed|flatbed)   SOURCE=Flatbed; shift ;;
+  ""|-h|--help)  usage; exit 0 ;;
+  scan)
+    CMD=scan; shift
+    case "${1:-}" in
+      auto)        SOURCE=auto;    shift ;;
+      feeder)      SOURCE=ADF;     shift ;;
+      bed|flatbed) SOURCE=Flatbed; shift ;;
+      ""|-*)       SOURCE=auto ;;          # omitted, or options follow directly
+      *) die "scan takes auto, feeder or bed (got '$1')" ;;
+    esac ;;
   find)          CMD=find;       shift ;;
   status)        CMD=status;     shift ;;
   stop)          CMD=stop;       shift ;;
   __idle-timer)  idle_timer_run "${2:-60}"; exit 0 ;;
-  -h|--help)     usage; exit 0 ;;
+  -*)            die "no command given -- did you mean 'scanbox scan $1'? (try --help)" ;;
+  *)             die "unknown command: $1 (try --help)" ;;
 esac
 
 while [ $# -gt 0 ]; do
