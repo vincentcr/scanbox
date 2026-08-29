@@ -75,7 +75,7 @@ esac
 n=$(page_count)
 if [ "$n" -eq 0 ]; then
   if grep -q "out of documents" "$tmp/adf.err" 2>/dev/null; then
-    echo "the document feeder is empty -- load it, or use 'scanner bed'" >&2
+    echo "the document feeder is empty -- load it, or use 'scanbox bed'" >&2
   else
     sed 's/^/    /' "$tmp/adf.err" >&2 2>/dev/null || true
     echo "no pages were scanned" >&2
@@ -92,7 +92,7 @@ if [ "$used" = "ADF" ] && ! grep -q "out of documents" "$tmp/adf.err" 2>/dev/nul
   echo "TRUNCATED $n"
   {
     echo "the feeder stopped before reporting it was empty, after $n page(s)."
-    echo "scanner kept what it got, but sheets may be missing. scanimage said:"
+    echo "scanbox kept what it got, but sheets may be missing. scanimage said:"
     sed 's/^/    /' "$tmp/adf.err" 2>/dev/null | tail -5
   } >&2
 fi

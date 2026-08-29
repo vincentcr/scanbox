@@ -3,7 +3,7 @@
 **Scanning again from an older HP MFP that macOS dropped support for** — HP LaserJet /
 OfficeJet all-in-ones that still print fine over AirPrint but whose scanner vanished
 somewhere around macOS Ventura. Runs HPLIP in an on-demand Debian VM and gives you a
-`scanner` command.
+`scanbox` command.
 
 Developed against an **HP LaserJet Pro 200 color MFP M276nw** (2013) on Apple Silicon.
 
@@ -56,29 +56,29 @@ Intel Macs should work (Lima supports both) but are likewise untested.
 brew tap vincentcr/scanbox
 brew trust vincentcr/scanbox   # Homebrew 6+ gates third-party taps
 brew install scanbox           # pulls in lima
-scanner find                   # discover the scanner, then save it as shown
+scanbox find                   # discover the scanner, then save it as shown
 ```
 
 Or without Homebrew:
 
 ```sh
-brew install lima          # the one prerequisite; scanner reports it, never installs it
+brew install lima          # the one prerequisite; scanbox reports it, never installs it
 git clone https://github.com/vincentcr/scanbox && cd scanbox
-./bin/install              # symlinks scanner into ~/.local/bin
-scanner find
+./bin/install              # symlinks scanbox into ~/.local/bin
+scanbox find
 ```
 
-`scanner find` prints the exact command to write your config.
+`scanbox find` prints the exact command to write your config.
 
 ## Use
 
 ```sh
-scanner                        # scan whatever is loaded: feeder if present, else bed
-scanner feeder                 # force the document feeder
-scanner bed                    # force the flatbed
-scanner find                   # discover scanners on the network
-scanner status                 # VM state, config, resolved address
-scanner stop                   # stop the VM now
+scanbox                        # scan whatever is loaded: feeder if present, else bed
+scanbox feeder                 # force the document feeder
+scanbox bed                    # force the flatbed
+scanbox find                   # discover scanners on the network
+scanbox status                 # VM state, config, resolved address
+scanbox stop                   # stop the VM now
 ```
 
 PDFs land in `~/Pictures/Scans/scan-YYYYMMDDHHMMSS.pdf`.
@@ -168,7 +168,7 @@ when it matters.
 
 ## Host portability notes
 
-`scanner` runs on macOS, which ships **bash 3.2** and none of `flock`, `setsid`, or
+`scanbox` runs on macOS, which ships **bash 3.2** and none of `flock`, `setsid`, or
 `timeout`. So: no `mapfile` or associative arrays, `mkdir` as the mutex, `nohup` for
 detaching, and `perl` for timeouts — and perl must stay parent and *reap* its child,
 because an exec'd process killed by SIGALRM makes the shell print `Alarm clock: 14` and
@@ -176,7 +176,7 @@ loses the exit status besides.
 
 ## VM lifecycle
 
-`scanner` owns it entirely. There is no launchd agent — a permanently registered
+`scanbox` owns it entirely. There is no launchd agent — a permanently registered
 background job is the thing this design avoids. After each scan it arms one detached
 timer, guarded by a pidfile, which stops the VM once idle.
 

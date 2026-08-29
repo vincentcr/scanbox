@@ -8,8 +8,8 @@ STATE_DIR="${SCANBOX_STATE_DIR:-$HOME/.local/state/scanbox}"
 CONFIG_FILE="${SCANBOX_CONFIG:-$HOME/.config/scanbox/config}"
 
 say()  { printf '%s\n' "$*" >&2; }
-warn() { printf 'scanner: %s\n' "$*" >&2; }
-die()  { printf 'scanner: %s\n' "$*" >&2; exit 1; }
+warn() { printf 'scanbox: %s\n' "$*" >&2; }
+die()  { printf 'scanbox: %s\n' "$*" >&2; exit 1; }
 
 # macOS has no `timeout`, so perl provides it. Note perl must *stay* as the parent
 # and reap the child rather than exec'ing into it: an exec'd process killed by

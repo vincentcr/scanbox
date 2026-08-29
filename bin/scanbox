@@ -27,14 +27,14 @@ CMD=scan
 
 usage() {
   cat <<'EOF'
-scanner -- scan from the network MFP
+scanbox -- scan from the network MFP
 
-  scanner                 scan whatever is loaded (feeder if present, else the bed)
-  scanner feeder          force the document feeder
-  scanner bed             force the flatbed
-  scanner find            discover scanners on the network
-  scanner status          VM state, config, resolved printer
-  scanner stop            stop the VM now
+  scanbox                 scan whatever is loaded (feeder if present, else the bed)
+  scanbox feeder          force the document feeder
+  scanbox bed             force the flatbed
+  scanbox find            discover scanners on the network
+  scanbox status          VM state, config, resolved printer
+  scanbox stop            stop the VM now
 
 Options
   --out DIR         where PDFs land        (default ~/Pictures/Scans)
@@ -128,7 +128,7 @@ resolve_printer() {
     die "no scanner configured.
 
 Run:
-    scanner find
+    scanbox find
 
 then write the result to $CONFIG_FILE, e.g.:
     mkdir -p $(dirname "$CONFIG_FILE")
@@ -138,7 +138,7 @@ then write the result to $CONFIG_FILE, e.g.:
   if [ -z "$ip" ]; then
     ip="$(resolve_ipv4 "$host" || true)"
     [ -n "$ip" ] || die "could not resolve '$host' on this network.
-Is the printer on? Run 'scanner find' to see what is reachable."
+Is the printer on? Run 'scanbox find' to see what is reachable."
   fi
   printf '%s\n' "$ip"
 }
@@ -160,7 +160,7 @@ Check the printer is on and reachable from this network."
 cmd_status() {
   require_lima
   printf 'VM          %s\n' "$(vm_exists && vm_status || echo 'not created')"
-  printf 'config      %s\n' "$([ -f "$CONFIG_FILE" ] && echo "$CONFIG_FILE" || echo 'none -- run: scanner find')"
+  printf 'config      %s\n' "$([ -f "$CONFIG_FILE" ] && echo "$CONFIG_FILE" || echo 'none -- run: scanbox find')"
   if [ -f "$CONFIG_FILE" ]; then
     # shellcheck disable=SC1090
     . "$CONFIG_FILE"
@@ -192,7 +192,7 @@ cmd_scan() {
   # Keep the guest's stderr: it carries the reason a scan failed ("the feeder is
   # empty") and any truncation detail. Swallowing it leaves a bare "scan failed",
   # which tells you nothing about what to do next.
-  local errf; errf="$(mktemp -t scanner)"
+  local errf; errf="$(mktemp -t scanbox)"
   if ! summary="$(limactl shell "$VM_NAME" bash -s -- \
         "$uri" "$SOURCE" "$MODE" "$DPI" "$PAGE" "$LOSSLESS" "$NAME" \
         < "$ROOT/lib/guest-scan.sh" 2>"$errf")"; then

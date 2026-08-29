@@ -8,8 +8,8 @@ command -v limactl >/dev/null 2>&1 \
   || echo "note: lima is not installed yet -- 'brew install lima' before first scan" >&2
 
 mkdir -p "$TARGET"
-ln -sf "$ROOT/bin/scanner" "$TARGET/scanner"
-echo "installed: $TARGET/scanner -> $ROOT/bin/scanner"
+ln -sf "$ROOT/bin/scanbox" "$TARGET/scanbox"
+echo "installed: $TARGET/scanbox -> $ROOT/bin/scanbox"
 
 case ":$PATH:" in
   *":$TARGET:"*) ;;

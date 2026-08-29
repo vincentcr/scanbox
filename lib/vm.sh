@@ -124,7 +124,7 @@ idle_timer_arm() {
   mkdir -p "$STATE_DIR"
   # nohup, not setsid -- macOS has no setsid. Detaches from the terminal so the
   # timer outlives the shell that started the scan.
-  nohup "$ROOT/bin/scanner" __idle-timer "$keep_alive_min" \
+  nohup "$ROOT/bin/scanbox" __idle-timer "$keep_alive_min" \
     >"$STATE_DIR/idle-timer.log" 2>&1 &
   echo $! > "$STATE_DIR/$TIMER_PID_FILE_NAME"
 }
