@@ -14,7 +14,15 @@
 # only in the journal.
 set -euo pipefail
 
-if [ -e /usr/share/hplip/scan/plugins/bb_soapht.so ]; then
+# Any scan backend means the plugin is in. Which one a model needs varies
+# (bb_soapht here, bb_soap / bb_marvell / bb_escl elsewhere) and the installer
+# lays down all of them, so do not test for one specific file.
+plugin_present() {
+  for f in /usr/share/hplip/scan/plugins/bb_*.so; do [ -e "$f" ] && return 0; done
+  return 1
+}
+
+if plugin_present; then
   echo "20-plugin: already installed"
   exit 0
 fi
@@ -37,8 +45,8 @@ curl -fsSL -o "${SRC}/${RUN}" \
 LOG=/tmp/hp-plugin-install.log
 yes | hp-plugin -i -p "$SRC" >"$LOG" 2>&1 || true
 
-if [ ! -e /usr/share/hplip/scan/plugins/bb_soapht.so ]; then
-  echo "FATAL: bb_soapht.so missing after plugin install" >&2
+if ! plugin_present; then
+  echo "FATAL: no bb_*.so scan backend after plugin install" >&2
   tail -30 "$LOG" >&2
   exit 1
 fi

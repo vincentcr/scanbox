@@ -35,8 +35,12 @@ vm_responsive() { bounded 15 limactl shell "$VM_NAME" true >/dev/null 2>&1; }
 vm_is_provisioned() {
   bounded 20 limactl shell "$VM_NAME" test \
     -x "$GUEST_LIB/autofit.sh" >/dev/null 2>&1 || return 1
-  bounded 20 limactl shell "$VM_NAME" test \
-    -e /usr/share/hplip/scan/plugins/bb_soapht.so >/dev/null 2>&1
+  # Any scan backend will do. HP ships bb_soap / bb_soapht / bb_marvell / bb_escl
+  # and the installer lays down all of them; which one a given model needs varies,
+  # so testing for one specific file would wrongly fail on other printers.
+  bounded 20 limactl shell "$VM_NAME" bash -c \
+    'for f in /usr/share/hplip/scan/plugins/bb_*.so; do [ -e "$f" ] && exit 0; done; exit 1' \
+    >/dev/null 2>&1
 }
 
 # Scripts are piped in over stdin rather than read from a mount, so the VM has no
