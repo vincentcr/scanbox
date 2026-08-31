@@ -96,7 +96,7 @@ PDFs land in `~/Pictures/Scans/scan-YYYYMMDDHHMMSS.pdf`.
 | `--dpi N` | 75–1200, default 300 |
 | `--mode M` | `Color`\|`Gray`\|`Lineart` |
 | `--page P` | `auto`\|`letter`\|`legal`\|`a4`\|`max` |
-| `--lossless` | disable the scanner's in-transit JPEG compression |
+| `--lossless` | disable the scanner's in-transit JPEG compression (slow — see below) |
 | `--keep-alive MIN` | idle minutes before the VM stops (default 60) |
 | `--printer HOST` | override the configured scanner for one run |
 
@@ -171,6 +171,21 @@ loaded.)
 and smaller than TIFF. The scanner JPEG-compresses *in transit* before the data ever
 reaches us — the only lossy step, which no output format recovers. Use `--lossless`
 when it matters.
+
+It is not free. Without the in-transit JPEG the whole raster crosses the network
+uncompressed, and this printer's SOAP transfer measures about **550 KB/s**:
+
+| | bytes on the wire | time per page |
+|---|---|---|
+| `--lossless --dpi 300` | 27 MB | ~50 s |
+| `--lossless --dpi 600` | 107 MB | ~3 min |
+| `--lossless --dpi 1200` | 430 MB | ~13 min |
+
+A 1200 dpi lossless page really does take a quarter of an hour, so `scan` prints the
+estimate up front and then reports a live percentage and ETA. Cancelling is safe —
+Ctrl-C stops the scan inside the VM as well as on the host. Note that the printer
+holds its one scan session for roughly **45 seconds** after an aborted scan; `scan`
+retries through that window rather than failing.
 
 ## Host portability notes
 

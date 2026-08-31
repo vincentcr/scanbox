@@ -2,17 +2,40 @@
 # Runs INSIDE the VM. Scans, sizes the pages, assembles a PDF, and prints a small
 # machine-readable summary the host parses.
 #
-#   guest-scan.sh <uri> <auto|ADF|Flatbed> <mode> <dpi> <page> <lossless 0|1> <name>
+#   guest-scan.sh <uri> <auto|ADF|Flatbed> <mode> <dpi> <page> <lossless 0|1> <name> [runid]
 #
 # Output lines: "PAGE <n> <size> <measured_in>", "SOURCE <x>", "PAGES <n>", "OUT <path>"
 set -euo pipefail
 
 URI="$1"; SOURCE="$2"; MODE="$3"; DPI="$4"; PAGE="$5"; LOSSLESS="$6"; NAME="$7"
+RUNID="${8:-}"
 
 AUTOFIT=/usr/local/lib/scanbox/autofit.sh
 OUTDIR=/tmp/scanbox-out
+
+# The host cannot signal us. `limactl shell` rides lima's shared SSH
+# ControlMaster, which outlives the client that borrowed it, and the session gets
+# no TTY -- so sshd never sends SIGHUP when the host goes away. A Ctrl-C on the
+# host therefore leaves this script and its scanimage running, still holding the
+# printer's single scan session, and every later scan then fails with a bare
+# "sane_start: Error during device I/O" that points nowhere useful. The host has
+# to kill us by hand, and needs somewhere to read the id from.
+#
+# sshd already put us in a process group of our own with this shell as leader, so
+# $$ is also the group id: killing -$$ takes scanimage down with us.
+PGID_FILE=""
+[ -n "$RUNID" ] && PGID_FILE="/tmp/scanbox-run-$RUNID.pgid"
+
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+cleanup() {
+  rm -rf "$tmp"
+  [ -n "$PGID_FILE" ] && rm -f "$PGID_FILE"
+  return 0
+}
+trap cleanup EXIT
+
+[ -n "$PGID_FILE" ] && echo $$ > "$PGID_FILE"
+
 rm -rf "$OUTDIR"; mkdir -p "$OUTDIR"
 
 # The scanner JPEG-compresses in transit by default; that is the only place image
@@ -42,20 +65,78 @@ page_count() {
   echo "$c"
 }
 
+# --progress makes scanimage report "Progress: xx.x%" on stderr, separated by
+# carriage returns so it overwrites one line on a terminal. Nobody is watching
+# that terminal, so re-emit each reading on stdout as a PROGRESS line and let the
+# host draw it. A lossless 1200dpi page is ~430MB and takes about 13 minutes; with
+# only a spinner to look at, that is indistinguishable from a hang, which is how
+# these end up cancelled halfway through.
+#
+# `2>&1 >/dev/null` is order-sensitive: it points stderr at the pipe and only then
+# sends stdout to /dev/null, so the progress text is what flows down it. The image
+# itself never goes to stdout -- it is written via -o/--batch.
+progress_filter() {
+  awk 'BEGIN { RS = "\r" } /Progress:/ { print "PROGRESS " $2; fflush() }'
+}
+
+# scanimage's stderr now carries progress noise as well as real diagnostics. Only
+# the diagnostics are worth showing a human.
+scan_errors() { tr '\r' '\n' < "$1" 2>/dev/null | grep -vE '^(Progress:|[[:space:]]*)$' || true; }
+
+# Run one scanimage, streaming progress and keeping stderr for diagnosis.
+# Returns scanimage's own exit status, not the pipeline's.
+run_scanimage() {
+  local errfile="$1"; shift
+  local rc
+  set +e
+  "$@" --progress 2>&1 >/dev/null | tee "$errfile" | progress_filter
+  rc=${PIPESTATUS[0]}
+  set -e
+  return "$rc"
+}
+
+# The printer allows exactly one scan session, and it does not free it the instant
+# the client goes away: after an aborted scan it keeps refusing new sessions for
+# roughly 45 seconds, reporting a bare "Error during device I/O". Retrying quietly
+# through that window is the difference between "it works" and an error that reads
+# like the scanner is broken.
+DEVICE_BUSY_TRIES=6
+DEVICE_BUSY_WAIT=15
+
+busy_error() { grep -q "Error during device I/O" "$1" 2>/dev/null; }
+
+scan_with_retry() {
+  local errfile="$1"; shift
+  local i=1
+  while :; do
+    run_scanimage "$errfile" "$@" && return 0
+    busy_error "$errfile" || return 1
+    [ "$i" -ge "$DEVICE_BUSY_TRIES" ] && return 1
+    # Surfaced by the host, so a wait this long never looks like a stall.
+    echo "NOTE the scanner is still busy with a previous scan; retrying in ${DEVICE_BUSY_WAIT}s ($i/$DEVICE_BUSY_TRIES)"
+    sleep "$DEVICE_BUSY_WAIT"
+    i=$((i + 1))
+  done
+}
+
 scan_adf() {
   # --batch keeps pulling sheets until the feeder reports empty. An empty feeder
   # fails in ~0.3s with "Document feeder out of documents" and moves no paper,
   # which is what makes source autodetection cheap.
-  scanimage -d "$URI" --source ADF --mode "$MODE" --resolution "$DPI" \
-    $adf_height $compress --format=png --batch="$tmp/p%04d.png" \
-    >/dev/null 2>"$tmp/adf.err" || true
+  #
+  # No retry here: an empty feeder is a normal, expected failure, and under `auto`
+  # this call is just a probe for whether paper is loaded. Waiting a minute on a
+  # busy device before even trying the flatbed would be the wrong trade.
+  run_scanimage "$tmp/adf.err" \
+    scanimage -d "$URI" --source ADF --mode "$MODE" --resolution "$DPI" \
+    $adf_height $compress --format=png --batch="$tmp/p%04d.png" || true
 }
 
 scan_flatbed() {
-  scanimage -d "$URI" --source Flatbed --mode "$MODE" --resolution "$DPI" \
+  scan_with_retry "$tmp/bed.err" \
+    scanimage -d "$URI" --source Flatbed --mode "$MODE" --resolution "$DPI" \
     $height $compress --format=png -o "$tmp/p0001.png" \
-    >/dev/null 2>"$tmp/bed.err" \
-    || { sed 's/^/  /' "$tmp/bed.err" >&2; exit 1; }
+    || { scan_errors "$tmp/bed.err" | sed 's/^/  /' >&2; exit 1; }
 }
 
 case "$SOURCE" in
@@ -77,7 +158,7 @@ if [ "$n" -eq 0 ]; then
   if grep -q "out of documents" "$tmp/adf.err" 2>/dev/null; then
     echo "the document feeder is empty -- load it, or use 'scanbox bed'" >&2
   else
-    sed 's/^/    /' "$tmp/adf.err" >&2 2>/dev/null || true
+    scan_errors "$tmp/adf.err" | sed 's/^/    /' >&2 || true
     echo "no pages were scanned" >&2
   fi
   exit 1
@@ -93,14 +174,17 @@ if [ "$used" = "ADF" ] && ! grep -q "out of documents" "$tmp/adf.err" 2>/dev/nul
   {
     echo "the feeder stopped before reporting it was empty, after $n page(s)."
     echo "scanbox kept what it got, but sheets may be missing. scanimage said:"
-    sed 's/^/    /' "$tmp/adf.err" 2>/dev/null | tail -5
+    scan_errors "$tmp/adf.err" | sed 's/^/    /' | tail -5
   } >&2
 fi
 
 # Size each sheet from its own trailing edge. ADF only -- the flatbed has no
 # backing to measure against, since the lid is the same white as paper.
 if [ "$used" = "ADF" ] && [ "$PAGE" = "auto" ]; then
+  i=0
   for f in "$tmp"/p*.png; do
+    i=$((i + 1))
+    echo "PHASE measuring page $i of $n"
     set -- $(bash "$AUTOFIT" measure "$f" "$DPI")
     bash "$AUTOFIT" crop "$f" "$2"
     echo "PAGE $(basename "$f" .png) $1 $3"
@@ -108,6 +192,9 @@ if [ "$used" = "ADF" ] && [ "$PAGE" = "auto" ]; then
 fi
 
 # Every page is kept, blanks included -- predictable beats clever.
+# Worth announcing: a 430MB lossless page takes ImageMagick a while, and by this
+# point the scanner has gone quiet, so silence here reads as a stall too.
+echo "PHASE building the PDF"
 convert "$tmp"/p*.png -quality 88 "$OUTDIR/$NAME.pdf"
 
 echo "SOURCE $used"

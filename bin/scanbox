@@ -20,12 +20,52 @@ ROOT="$(cd -P "$(dirname "$_src")/.." && pwd)"
 . "$ROOT/lib/discover.sh"
 . "$ROOT/lib/vm.sh"
 
+# Set for as long as a scan is actually in flight inside the VM; see
+# remote_scan_abort for why we have to track it.
+SCAN_RUN_ID=""
+
+# Stop a scan that is running inside the VM.
+#
+# Killing this script is not enough. `limactl shell` rides lima's persistent SSH
+# ControlMaster, which belongs to the hostagent rather than to us, so it survives
+# our death; and the session has no TTY, so sshd sends no SIGHUP. The guest keeps
+# scanning, keeps holding the printer's one scan session, and the next scan dies
+# with "sane_start: Error during device I/O" -- with the lock already released, so
+# nothing even suggests a scan is still running. Killing the guest's process group
+# explicitly is the only thing that actually stops it.
+remote_scan_abort() {
+  [ -n "$SCAN_RUN_ID" ] || return 0
+  local id="$SCAN_RUN_ID"
+  SCAN_RUN_ID=""            # never attempt this twice, however this one ends
+  # Bounded: the point of this path is that the user wants out now, and the VM
+  # may itself be wedged. Best effort, never fatal -- we are already exiting.
+  bounded 20 limactl shell "$VM_NAME" bash -c '
+    f=/tmp/scanbox-run-'"$id"'.pgid
+    [ -f "$f" ] || exit 0
+    g=$(cat "$f" 2>/dev/null) || exit 0
+    [ -n "$g" ] || exit 0
+    kill -TERM -"$g" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do kill -0 -"$g" 2>/dev/null || break; sleep 1; done
+    kill -KILL -"$g" 2>/dev/null || true
+    rm -f "$f"
+  ' >/dev/null 2>&1 || true
+}
+
 # One cleanup path for the whole run: the spinner must never leave the cursor
-# hidden or a half-drawn line behind, including on Ctrl-C.
-cleanup() { spinner_stop; lock_release; }
+# hidden or a half-drawn line behind, including on Ctrl-C. The in-flight scan is
+# torn down before the lock is dropped, so the lock is never free while the
+# scanner is still busy.
+cleanup() { spinner_stop; remote_scan_abort; lock_release; }
 # INT/TERM must actually terminate. A handler that only tidies up leaves the
 # script running after Ctrl-C, which is not what anyone means by it.
-on_signal() { cleanup; exit 130; }
+on_signal() {
+  spinner_stop
+  # `|| true` matters: errexit applies inside a trap too, and without it a Ctrl-C
+  # with no scan running would exit here, before cleanup restored the cursor.
+  [ -n "$SCAN_RUN_ID" ] && say "stopping the scan inside the VM..." || true
+  cleanup
+  exit 130
+}
 trap cleanup EXIT
 trap on_signal INT TERM
 
@@ -308,26 +348,140 @@ cmd_status() {
   fi
 }
 
+# Bytes on the wire for one page, and how long that takes.
+#
+# --lossless turns off the scanner's in-transit JPEG, so the entire raster crosses
+# the network uncompressed: at 1200dpi colour that is 429MB for a single sheet,
+# and this printer's SOAP transfer tops out around 550KB/s. Thirteen minutes
+# behind a spinner that says only "scanning" is indistinguishable from a hang,
+# which is how these scans end up cancelled halfway -- so say the number instead.
+LOSSLESS_RATE=550000     # bytes/sec, measured off an M276nw over vzNAT
+
+lossless_estimate() {
+  local dpi="$1" mode="$2" page="$3" h_in bpp
+  case "$page" in
+    letter) h_in=11.0 ;;
+    legal)  h_in=14.0 ;;
+    # auto and max both scan the full bed and trim afterwards.
+    *)      h_in=11.7 ;;
+  esac
+  case "$mode" in Color) bpp=24 ;; Gray) bpp=8 ;; *) bpp=1 ;; esac
+  awk -v d="$dpi" -v h="$h_in" -v b="$bpp" -v r="$LOSSLESS_RATE" \
+    'BEGIN { n = (8.5*d) * (h*d) * b/8; printf "%.0f %.0f\n", n/1000000, n/r }'
+}
+
+# Read the guest's output as it arrives and turn it into a live status line.
+#
+# The guest speaks three lines that are meant for a human and are consumed here --
+# PROGRESS (a percentage from scanimage), PHASE (what it moved on to) and NOTE (a
+# passing condition worth saying out loud). Everything else is the machine-readable
+# summary, which goes to a file: this runs in a pipeline, so it is a subshell, and
+# a variable set here would not survive.
+scan_stream() {
+  local base="$1" outf="$2"
+  local line pct whole started now elapsed left eta last_logged=-1
+  : > "$outf"
+  started=$(date +%s)
+  while IFS= read -r line; do
+    case "$line" in
+      PROGRESS\ *)
+        pct="${line#PROGRESS }"
+        whole="${pct%%.*}"; whole="${whole%\%}"
+        case "$whole" in ''|*[!0-9]*) continue ;; esac
+        # An ETA measured from this scan beats the up-front guess, and it is the
+        # thing that actually answers "is this stuck?".
+        # Needs both a few percent and a few seconds behind it: extrapolating from
+        # 1% of a scan, or from two seconds of one, produces a confident number
+        # that is simply wrong, which is worse than showing none.
+        eta=""
+        now=$(date +%s); elapsed=$((now - started))
+        if [ "$whole" -ge 3 ] && [ "$elapsed" -ge 5 ]; then
+          left=$(( elapsed * (100 - whole) / whole ))
+          if [ "$left" -gt 60 ]; then eta=", ~$((left / 60)) min left"
+          elif [ "$left" -gt 0 ]; then eta=", ~${left}s left"
+          fi
+        fi
+        spinner_update "$base  $pct$eta"
+        # Piped output gets no animation, so mark every 10% instead of nothing.
+        if [ ! -t 2 ] && [ $((whole / 10)) -ne "$last_logged" ]; then
+          last_logged=$((whole / 10))
+          printf '  %s%s\n' "$pct" "$eta" >&2
+        fi
+        ;;
+      PHASE\ *)  spinner_update "${line#PHASE }" ;;
+      NOTE\ *)   spinner_say "${line#NOTE }" ;;
+      *)         printf '%s\n' "$line" >> "$outf" ;;
+    esac
+  done
+  return 0
+}
+
+# A scan left behind by an interrupted run still owns the printer's only scan
+# session. We hold the lock by this point, so no other scanbox run can legitimately
+# be scanning -- anything still running is an orphan, and clearing it is the
+# difference between working and a cryptic device I/O error.
+clear_stale_scan() {
+  limactl shell "$VM_NAME" pgrep -x scanimage >/dev/null 2>&1 || return 0
+  warn "a scan from an earlier run is still going inside the VM. Stopping it --
+      otherwise the printer refuses this one."
+  limactl shell "$VM_NAME" pkill -x scanimage >/dev/null 2>&1 || true
+  # Only wait for the process to actually go. The printer itself holds the session
+  # for ~45s longer, but the guest retries through that window rather than making
+  # everyone sit here for it.
+  bounded 20 limactl shell "$VM_NAME" bash -c \
+    'for _ in $(seq 1 15); do pgrep -x scanimage >/dev/null || break; sleep 1; done' \
+    >/dev/null 2>&1 || true
+}
+
 cmd_scan() {
-  local ip uri out summary
+  local ip uri out summary msg est_mb est_secs
   ip="$(resolve_printer)" || die "could not reach the configured scanner.
 Is the printer on, and are you on its network? Run 'scanbox setup' to look again."
 
   vm_ensure
   lock_acquire
+  clear_stale_scan
 
   uri="$(device_uri "$ip")"
   [ -n "$NAME" ] || NAME="scan-$(date +%Y%m%d%H%M%S)"
   mkdir -p "$OUT_DIR"
 
-  spinner_start "scanning"
+  msg="scanning"
+  if [ "$LOSSLESS" -eq 1 ]; then
+    read -r est_mb est_secs <<EOF
+$(lossless_estimate "$DPI" "$MODE" "$PAGE")
+EOF
+    if [ "$est_secs" -ge 120 ]; then
+      say "lossless at ${DPI}dpi is about ${est_mb}MB per page uncompressed --"
+      say "expect roughly $((est_secs / 60)) min a page. That is the transfer, not a hang."
+      msg="scanning (~${est_mb}MB/page, ~$((est_secs / 60)) min)"
+    fi
+  fi
+
+  # A unique id per run, so an abort can only ever kill this scan.
+  SCAN_RUN_ID="$$-$(date +%s)"
+
+  spinner_start "$msg"
   # Keep the guest's stderr: it carries the reason a scan failed ("the feeder is
   # empty") and any truncation detail. Swallowing it leaves a bare "scan failed",
   # which tells you nothing about what to do next.
-  local errf; errf="$(mktemp -t scanbox)"
-  if ! summary="$(limactl shell "$VM_NAME" bash -s -- \
-        "$uri" "$SOURCE" "$MODE" "$DPI" "$PAGE" "$LOSSLESS" "$NAME" \
-        < "$ROOT/lib/guest-scan.sh" 2>"$errf")"; then
+  local errf sumf rc
+  errf="$(mktemp -t scanbox)"; sumf="$(mktemp -t scanbox-sum)"
+  # errexit off across the pipeline: we want scanimage's own status out of
+  # PIPESTATUS, not the reader's, and a failed scan is handled below rather than
+  # by aborting the script out from under the cleanup that reports it.
+  set +e
+  limactl shell "$VM_NAME" bash -s -- \
+      "$uri" "$SOURCE" "$MODE" "$DPI" "$PAGE" "$LOSSLESS" "$NAME" "$SCAN_RUN_ID" \
+      < "$ROOT/lib/guest-scan.sh" 2>"$errf" | scan_stream "$msg" "$sumf"
+  rc=${PIPESTATUS[0]}
+  set -e
+  summary="$(cat "$sumf")"; rm -f "$sumf"
+  # The guest has stopped either way, so there is nothing left to abort. Clearing
+  # this first keeps the failure path below from making a pointless SSH round trip
+  # on its way out through the EXIT trap.
+  SCAN_RUN_ID=""
+  if [ "$rc" -ne 0 ]; then
     spinner_stop
     sed 's/^/  /' "$errf" >&2
     rm -f "$errf"

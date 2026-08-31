@@ -25,10 +25,17 @@ die()  { printf 'scanbox: %s\n' "$*" >&2; exit 1; }
 # ---------------------------------------------------------------------------
 
 SPINNER_PID=""
+# The message lives in a file, not a variable, because the thing that knows how a
+# long step is going is often not the shell drawing the spinner: the scan status
+# arrives on a pipeline, which bash runs in a subshell, and a variable set there
+# would never reach the animation. A file is visible to both.
+SPINNER_MSG_FILE=""
 
 spinner_start() {
   local msg="$1"
   spinner_stop
+  SPINNER_MSG_FILE="$(mktemp -t scanbox-spin)"
+  printf '%s' "$msg" > "$SPINNER_MSG_FILE"
   # Not a terminal (piped, CI): print one plain line instead of animating.
   if [ ! -t 2 ]; then printf '%s...\n' "$msg" >&2; return 0; fi
   printf '\033[?25l' >&2                       # hide cursor
@@ -36,20 +43,40 @@ spinner_start() {
   # anchor we need: spinners are sometimes started from within $( ), where
   # SPINNER_PID lands in that subshell and the top-level trap cannot reach it.
   # Watching the main shell means the spinner cleans itself up regardless.
-  local anchor=$$
+  local anchor=$$ msgfile="$SPINNER_MSG_FILE"
   (
     # Background jobs of a non-interactive shell inherit SIGINT ignored, so
     # without this Ctrl-C leaves the spinner drawing over the user's prompt.
     trap 'exit 0' INT TERM HUP
     frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
-    i=0
+    i=0 last=""
     while kill -0 "$anchor" 2>/dev/null; do
       i=$(( (i + 1) % ${#frames[@]} ))
-      printf '\r  %s %s ' "${frames[$i]}" "$msg" >&2
+      cur="$(cat "$msgfile" 2>/dev/null)"
+      # A shortening message must not leave the tail of the previous one behind.
+      [ "$cur" != "$last" ] && printf '\r\033[K' >&2
+      last="$cur"
+      printf '\r  %s %s ' "${frames[$i]}" "$cur" >&2
       sleep 0.1
     done
   ) >/dev/null &
   SPINNER_PID=$!
+}
+
+# Change what a running spinner says. Safe when no spinner is running, and safe
+# from inside a subshell -- which is the whole point of the file.
+spinner_update() {
+  [ -n "$SPINNER_MSG_FILE" ] || return 0
+  printf '%s' "$1" > "$SPINNER_MSG_FILE" 2>/dev/null || true
+  return 0
+}
+
+# Print a line without the spinner scribbling over it. The animation redraws
+# itself on its next tick.
+spinner_say() {
+  [ -t 2 ] && printf '\r\033[K' >&2
+  printf 'scanbox: %s\n' "$*" >&2
+  return 0
 }
 
 # Clear the line and restore the cursor. Safe to call when nothing is running.
@@ -63,6 +90,10 @@ spinner_stop() {
     wait "$SPINNER_PID" 2>/dev/null || true
     SPINNER_PID=""
     [ -t 2 ] && printf '\r\033[K' >&2
+  fi
+  if [ -n "$SPINNER_MSG_FILE" ]; then
+    rm -f "$SPINNER_MSG_FILE"
+    SPINNER_MSG_FILE=""
   fi
   [ -t 2 ] && printf '\033[?25h' >&2
   return 0
