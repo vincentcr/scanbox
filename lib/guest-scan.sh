@@ -75,8 +75,23 @@ page_count() {
 # `2>&1 >/dev/null` is order-sensitive: it points stderr at the pipe and only then
 # sends stdout to /dev/null, so the progress text is what flows down it. The image
 # itself never goes to stdout -- it is written via -o/--batch.
+# Read the CR-delimited records with bash's own `read`, not awk.
+#
+# mawk buffers its *input* when RS is anything but a newline, so it sat on every
+# percentage until the scan ended and then emitted them in one burst -- a spinner
+# that said "scanning" for thirteen minutes and flashed "18.1%" once on its way
+# out. fflush() cannot fix that: the records had not been read yet, let alone
+# printed. gawk and `stdbuf` would each do, but neither is guaranteed present in
+# the guest, and bash reads pipes a byte at a time by construction -- which is
+# precisely the property needed here, at a volume where the syscalls are free.
 progress_filter() {
-  awk 'BEGIN { RS = "\r" } /Progress:/ { print "PROGRESS " $2; fflush() }'
+  local line
+  while IFS= read -r -d $'\r' line; do
+    case "$line" in
+      *Progress:*) printf 'PROGRESS %s\n' "${line##*Progress: }" ;;
+    esac
+  done
+  return 0
 }
 
 # scanimage's stderr now carries progress noise as well as real diagnostics. Only
