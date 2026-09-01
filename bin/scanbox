@@ -535,7 +535,12 @@ EOF
     say "WARNING: the feeder stopped early -- this scan may be missing pages."
     say "         Check the page count above against what you loaded."
   fi
-  for out in "${outs[@]}"; do printf '%s\n' "$out"; done
+  # `${outs[@]+"${outs[@]}"}`, not a bare `"${outs[@]}"`: bash 3.2 -- which is what
+  # macOS ships and what this script runs under -- treats expanding an empty array
+  # as an unbound variable and dies under `set -u`. The guard above means outs is
+  # never actually empty here, but that is a fact about today's guest protocol, not
+  # something worth staking a crash on.
+  for out in ${outs[@]+"${outs[@]}"}; do printf '%s\n' "$out"; done
 }
 
 case "$CMD" in
