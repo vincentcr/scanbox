@@ -1,14 +1,16 @@
 #!/bin/bash
-# Runs INSIDE the VM. Scans, sizes the pages, assembles a PDF, and prints a small
+# Runs INSIDE the VM. Scans, sizes the pages, assembles output, and prints a small
 # machine-readable summary the host parses.
 #
-#   guest-scan.sh <uri> <auto|ADF|Flatbed> <mode> <dpi> <page> <lossless 0|1> <name> [runid]
+#   guest-scan.sh <uri> <auto|ADF|Flatbed> <mode> <dpi> <page> <lossless 0|1> <name> [runid] [format]
 #
-# Output lines: "PAGE <n> <size> <measured_in>", "SOURCE <x>", "PAGES <n>", "OUT <path>"
+# Output lines: "PAGE <n> <size> <measured_in>", "SOURCE <x>", "PAGES <n>", "OUT <path>" (one
+# or more, in page order)
 set -euo pipefail
 
 URI="$1"; SOURCE="$2"; MODE="$3"; DPI="$4"; PAGE="$5"; LOSSLESS="$6"; NAME="$7"
 RUNID="${8:-}"
+FORMAT="${9:-pdf}"
 
 AUTOFIT=/usr/local/lib/scanbox/autofit.sh
 OUTDIR=/tmp/scanbox-out
@@ -207,11 +209,50 @@ if [ "$used" = "ADF" ] && [ "$PAGE" = "auto" ]; then
 fi
 
 # Every page is kept, blanks included -- predictable beats clever.
-# Worth announcing: a 430MB lossless page takes ImageMagick a while, and by this
-# point the scanner has gone quiet, so silence here reads as a stall too.
-echo "PHASE building the PDF"
-convert "$tmp"/p*.png -quality 88 "$OUTDIR/$NAME.pdf"
+#
+# Assembly can be its own slow step, right after the scanner has already gone
+# quiet: a 430MB lossless page takes ImageMagick a while to convert, and silence
+# here reads as a stall just as easily as silence during the scan did -- hence a
+# phase line per format. PNG is the exception and the whole point of offering it:
+# the pages are already PNG, so there is nothing to convert, only to copy.
+outs=()
+case "$FORMAT" in
+  pdf)
+    echo "PHASE building the PDF"
+    convert "$tmp"/p*.png -quality 88 "$OUTDIR/$NAME.pdf"
+    outs=("$OUTDIR/$NAME.pdf")
+    ;;
+  tiff)
+    echo "PHASE building the TIFF"
+    convert "$tmp"/p*.png -compress Zip "$OUTDIR/$NAME.tiff"
+    outs=("$OUTDIR/$NAME.tiff")
+    ;;
+  png)
+    echo "PHASE saving the PNG page$([ "$n" -eq 1 ] || echo s)"
+    i=0
+    for f in "$tmp"/p*.png; do
+      i=$((i + 1))
+      if [ "$n" -eq 1 ]; then dst="$OUTDIR/$NAME.png"
+      else dst="$OUTDIR/$(printf '%s-p%03d.png' "$NAME" "$i")"
+      fi
+      cp "$f" "$dst"
+      outs+=("$dst")
+    done
+    ;;
+  jpeg)
+    echo "PHASE building the JPEG$([ "$n" -eq 1 ] || echo s)"
+    i=0
+    for f in "$tmp"/p*.png; do
+      i=$((i + 1))
+      if [ "$n" -eq 1 ]; then dst="$OUTDIR/$NAME.jpg"
+      else dst="$OUTDIR/$(printf '%s-p%03d.jpg' "$NAME" "$i")"
+      fi
+      convert "$f" -quality 92 "$dst"
+      outs+=("$dst")
+    done
+    ;;
+esac
 
 echo "SOURCE $used"
 echo "PAGES $n"
-echo "OUT $OUTDIR/$NAME.pdf"
+for o in "${outs[@]}"; do echo "OUT $o"; done

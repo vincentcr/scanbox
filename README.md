@@ -96,6 +96,7 @@ PDFs land in `~/Pictures/Scans/scan-YYYYMMDDHHMMSS.pdf`.
 | `--dpi N` | 75–1200, default 300 |
 | `--mode M` | `Color`\|`Gray`\|`Lineart` |
 | `--page P` | `auto`\|`letter`\|`legal`\|`a4`\|`max` |
+| `--format F` | `pdf`\|`png`\|`tiff`\|`jpeg` (default `pdf`) |
 | `--lossless` | disable the scanner's in-transit JPEG compression (slow — see below) |
 | `--keep-alive MIN` | idle minutes before the VM stops (default 60) |
 | `--printer HOST` | override the configured scanner for one run |
@@ -167,10 +168,21 @@ missing without anyone noticing, so anything else is flagged loudly.
 software — the page count and sheet count simply disagree. Compare against what you
 loaded.)
 
-**5. File format is not where quality is lost.** Output is lossless (`/FlateDecode`)
-and smaller than TIFF. The scanner JPEG-compresses *in transit* before the data ever
-reaches us — the only lossy step, which no output format recovers. Use `--lossless`
-when it matters.
+**5. File format is not where quality is lost.** The default PDF output is lossless
+(`/FlateDecode`) and smaller than TIFF. The scanner JPEG-compresses *in transit*
+before the data ever reaches us — the only lossy step, which no output format
+recovers. Use `--lossless` when it matters.
+
+`--format` picks what lands on disk: `pdf` (the default, lossless, and stays that
+way regardless of this option) collates everything into one file, which is what you
+want for a multi-page document you'll read or print as a whole. `--format tiff` is
+also lossless and multi-page, and is the better pick for long-term archival, since
+some tools trust TIFF over PDF for that. `--format png` skips PDF assembly entirely
+and just saves the scanned pages as-is — it's the fastest path, and the only one
+that's lossless end-to-end with zero re-encoding, which makes it the right choice
+for a single photo. `--format jpeg` is there for when small size matters more than
+fidelity; combining it with `--lossless` is self-defeating (a warning says so) since
+you'd be paying for an uncompressed transfer only to re-compress it on disk anyway.
 
 It is not free. Without the in-transit JPEG the whole raster crosses the network
 uncompressed, and this printer's SOAP transfer measures about **550 KB/s**:

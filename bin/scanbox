@@ -71,6 +71,7 @@ trap on_signal INT TERM
 
 OUT_DIR="${SCANBOX_OUT:-$HOME/Pictures/Scans}"
 NAME=""; DPI=300; MODE=Color; PAGE=auto; LOSSLESS=0; KEEP_ALIVE=60; PRINTER_OVERRIDE=""
+FORMAT=pdf
 SETUP_OVERWRITE=0; SETUP_HOST=""
 SOURCE=auto
 CMD=""
@@ -97,6 +98,7 @@ Options (for scan)
   --dpi N           resolution             (default 300; 75..1200)
   --mode M          Color|Gray|Lineart     (default Color)
   --page P          auto|letter|legal|a4|max  (default auto)
+  --format F        pdf|png|tiff|jpeg      (default pdf)
   --lossless        disable the scanner's in-transit JPEG compression
   --keep-alive MIN  idle minutes before the VM stops (default 60)
   --printer HOST    override the configured scanner for this run
@@ -131,6 +133,7 @@ while [ $# -gt 0 ]; do
     --dpi)        DPI="$2"; shift 2 ;;
     --mode)       MODE="$2"; shift 2 ;;
     --page)       PAGE="$2"; shift 2 ;;
+    --format)     FORMAT="$2"; shift 2 ;;
     --lossless)   LOSSLESS=1; shift ;;
     --keep-alive) KEEP_ALIVE="$2"; shift 2 ;;
     --printer)    PRINTER_OVERRIDE="$2"; shift 2 ;;
@@ -144,6 +147,12 @@ done
 
 case "$PAGE" in auto|letter|legal|a4|max) ;; *) die "--page must be auto|letter|legal|a4|max" ;; esac
 case "$MODE" in Color|Gray|Lineart) ;; *) die "--mode must be Color, Gray or Lineart" ;; esac
+case "$FORMAT" in pdf|png|tiff|jpeg) ;; *) die "--format must be pdf, png, tiff or jpeg" ;; esac
+
+# Lossless strips the scanner's in-transit JPEG only to have it re-encoded on disk
+# by --format jpeg -- not wrong, exactly, but not what anyone asking for lossless
+# output meant either.
+[ "$LOSSLESS" -eq 1 ] && [ "$FORMAT" = jpeg ] && warn "--lossless with --format jpeg pays for an uncompressed transfer and then re-compresses it on disk anyway. Proceeding."
 
 # ---------------------------------------------------------------------------
 # find
@@ -472,7 +481,7 @@ EOF
   # by aborting the script out from under the cleanup that reports it.
   set +e
   limactl shell "$VM_NAME" bash -s -- \
-      "$uri" "$SOURCE" "$MODE" "$DPI" "$PAGE" "$LOSSLESS" "$NAME" "$SCAN_RUN_ID" \
+      "$uri" "$SOURCE" "$MODE" "$DPI" "$PAGE" "$LOSSLESS" "$NAME" "$SCAN_RUN_ID" "$FORMAT" \
       < "$ROOT/lib/guest-scan.sh" 2>"$errf" | scan_stream "$msg" "$sumf"
   rc=${PIPESTATUS[0]}
   set -e
@@ -493,16 +502,27 @@ EOF
 
   printf '%s\n' "$summary" | awk '$1=="PAGE" { printf "  %s: %s (measured %sin)\n", $2, $3, $4 }' >&2
 
-  local guest_pdf used pages
-  guest_pdf="$(printf '%s\n' "$summary" | awk '$1=="OUT"    {print $2}')"
-  used="$(     printf '%s\n' "$summary" | awk '$1=="SOURCE" {print $2}')"
-  pages="$(    printf '%s\n' "$summary" | awk '$1=="PAGES"  {print $2}')"
-  [ -n "$guest_pdf" ] || die "the VM produced no output"
+  local guest_outs used pages
+  guest_outs="$(printf '%s\n' "$summary" | awk '$1=="OUT"    {print $2}')"
+  used="$(      printf '%s\n' "$summary" | awk '$1=="SOURCE" {print $2}')"
+  pages="$(     printf '%s\n' "$summary" | awk '$1=="PAGES"  {print $2}')"
+  [ -n "$guest_outs" ] || die "the VM produced no output"
 
-  out="$OUT_DIR/$NAME.pdf"
+  # png/jpeg give one OUT line per page rather than one for the whole scan, so this
+  # copies however many files the guest produced -- one for pdf/tiff, one per page
+  # otherwise. The guest already names them from $NAME, so its basename is what we
+  # want on the host too.
+  local outs=() guest_out out_path
   spinner_start "saving"
-  limactl copy "$VM_NAME:$guest_pdf" "$out" >/dev/null 2>&1 \
-    || die "could not copy the scan out of the VM"
+  while IFS= read -r guest_out; do
+    [ -n "$guest_out" ] || continue
+    out_path="$OUT_DIR/$(basename "$guest_out")"
+    limactl copy "$VM_NAME:$guest_out" "$out_path" >/dev/null 2>&1 \
+      || die "could not copy the scan out of the VM"
+    outs+=("$out_path")
+  done <<EOF
+$guest_outs
+EOF
   spinner_stop
 
   lock_release
@@ -515,7 +535,7 @@ EOF
     say "WARNING: the feeder stopped early -- this scan may be missing pages."
     say "         Check the page count above against what you loaded."
   fi
-  printf '%s\n' "$out"
+  for out in "${outs[@]}"; do printf '%s\n' "$out"; done
 }
 
 case "$CMD" in
