@@ -1,0 +1,18 @@
+#!/bin/sh
+# The Python port, runnable as a command without displacing the shipped bash
+# `scanbox` alongside it. Both drive the same guest-side scripts, so they are
+# interchangeable from the VM's point of view; this exists so the port can be
+# exercised exactly like the real thing before anything switches over.
+#
+# Resolve through symlinks: this is meant to be symlinked into ~/.local/bin the
+# way bin/scanbox is, and macOS has no `readlink -f`.
+src=$0
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd)
+  src=$(readlink "$src")
+  case $src in /*) ;; *) src=$dir/$src ;; esac
+done
+root=$(cd -P "$(dirname "$src")/.." && pwd)
+
+PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" export PYTHONPATH
+exec python3 -m scanbox "$@"

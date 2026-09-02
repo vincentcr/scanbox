@@ -24,7 +24,7 @@ def is_ipv4(value: str) -> bool:
 
 def instances(seconds: float = 5.0) -> List[str]:
     """Service instance names currently advertising, de-duplicated."""
-    out = proc.stream_until_timeout(["dns-sd", "-B", MDNS_TYPE, "local"], seconds)
+    out = proc.collect_until_timeout(["dns-sd", "-B", MDNS_TYPE, "local"], seconds)
     found, seen = [], set()
     for line in out.splitlines():
         parts = line.split()
@@ -39,7 +39,7 @@ def instances(seconds: float = 5.0) -> List[str]:
 
 
 def _resolve_raw(instance: str, seconds: float = 4.0) -> str:
-    return proc.stream_until_timeout(
+    return proc.collect_until_timeout(
         ["dns-sd", "-L", instance, MDNS_TYPE, "local"], seconds
     )
 
@@ -90,7 +90,7 @@ def resolve_ipv4(host: str, seconds: float = 4.0) -> Optional[str]:
     ICMP; ping is the fallback.
     """
     host = (host or "").rstrip(".")
-    out = proc.stream_until_timeout(["dns-sd", "-G", "v4", host], seconds)
+    out = proc.collect_until_timeout(["dns-sd", "-G", "v4", host], seconds)
     for line in out.splitlines():
         parts = line.split()
         if len(parts) < 2 or parts[1] != "Add":
