@@ -91,7 +91,7 @@ PDFs land in `~/Pictures/Scans/scan-YYYYMMDDHHMMSS.pdf`.
 
 | option | |
 |---|---|
-| `--out DIR` | where PDFs land (default `~/Pictures/Scans`) |
+| `--out DIR` | where scans land (default `~/Pictures/Scans`) |
 | `--name NAME` | base filename |
 | `--dpi N` | 75–1200, default 300 |
 | `--mode M` | `Color`\|`Gray`\|`Lineart` |
@@ -133,7 +133,7 @@ the only trustworthy signal.
 
 **2. Discovery happens on the host, never in the guest.**
 Multicast does not cross Lima's vzNAT boundary, so `scanimage -L` inside the VM finds
-nothing. All Bonjour work is done by macOS (`lib/discover.sh`) and only a plain IPv4
+nothing. All Bonjour work is done by macOS (`scanbox/discover.py`) and only a plain IPv4
 address is passed in. `_scanner._tcp` is the right service type — close to exactly the
 set `hpaio` can drive, and its TXT record carries the model and `feeder=T`/`flatbed=T`.
 
@@ -201,11 +201,23 @@ retries through that window rather than failing.
 
 ## Host portability notes
 
-`scanbox` runs on macOS, which ships **bash 3.2** and none of `flock`, `setsid`, or
-`timeout`. So: no `mapfile` or associative arrays, `mkdir` as the mutex, `nohup` for
-detaching, and `perl` for timeouts — and perl must stay parent and *reap* its child,
-because an exec'd process killed by SIGALRM makes the shell print `Alarm clock: 14` and
-loses the exit status besides.
+The host side is Python — standard library only, no virtualenv, nothing to install
+beyond an interpreter. It targets **3.9**, which is what the macOS Command Line Tools
+ship, and Homebrew requires those anyway, so a Mac that can install this can already
+run it.
+
+Everything that runs *inside* the VM stays shell (`lib/guest-scan.sh`, `lib/autofit.sh`,
+`provision/`). Those are piped in over stdin, so the VM never learns where this repo
+lives — and there is no reason to give a Debian guest a Python dependency.
+
+The lock is the one piece that did not change: `mkdir` is still the mutex, because
+macOS has no `flock` and this has to work *between processes*. Two `scanbox scan`
+invocations are two processes, so an in-process lock would not be in the conversation.
+
+The host was bash until v0.5.0, which meant working around macOS's bash 3.2 and its
+missing `flock`/`setsid`/`timeout` — `nohup` for detaching, `perl` for timeouts, and no
+`mapfile` or associative arrays. None of that survives; `git log` has it if you are
+curious.
 
 ## VM lifecycle
 

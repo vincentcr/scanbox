@@ -5,7 +5,7 @@
 # we run that inside Linux.
 #
 # This file defines the VM only. `scanner` creates it on demand; software setup
-# lives in provision/ and is applied over stdin by lib/vm.sh.
+# lives in provision/ and is applied over stdin by scanbox/vm.py.
 
 # Only the image defaults. Deliberately NOT template:_default/mounts -- that base
 # mounts the home directory, which this VM has no need to see.
