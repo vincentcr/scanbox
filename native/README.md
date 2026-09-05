@@ -58,6 +58,6 @@ scans succeeded from both sources at 200 dpi grayscale:
 - Flatbed: 1700 x 2339, 8-bit grayscale PNG
 
 This proves the Xerox is usable through a VM-hosted WSD backend despite not
-supporting Apple's eSCL/AirScan protocol. The package installation and endpoint
-configuration were spike-only guest changes; project provisioning does not yet
-reproduce them.
+supporting Apple's eSCL/AirScan protocol. The temporary scan files, package,
+and endpoint configuration were removed from the guest after the test; project
+provisioning does not yet reproduce them.
