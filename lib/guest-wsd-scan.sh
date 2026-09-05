@@ -85,35 +85,47 @@ scan_to_file() {
 }
 
 scan_feeder() {
-  local source="$1"
-  local index=1 target status
-  while :; do
-    target=$(printf '%s/p%04d.png' "$OUTDIR" "$index")
-    rm -f "$target"
-    echo "PHASE scanning feeder page $index"
-    set +e
-    scan_to_file "$OUTDIR/feeder.err" "$source" "$target"
-    status=$?
-    set -e
+  local source="$1" status actual reported
+  echo "PHASE scanning feeder batch"
+  set +e
+  if [ -n "$height" ]; then
+    run_scanimage "$OUTDIR/feeder.err" \
+      scanimage -d "$DEVICE" --source "$source" --mode "$MODE" \
+      --resolution "$DPI" -y "$height" --format=png \
+      --batch="$OUTDIR/p%04d.png" --batch-start=1 --batch-increment=1
+  else
+    run_scanimage "$OUTDIR/feeder.err" \
+      scanimage -d "$DEVICE" --source "$source" --mode "$MODE" \
+      --resolution "$DPI" --format=png \
+      --batch="$OUTDIR/p%04d.png" --batch-start=1 --batch-increment=1
+  fi
+  status=$?
+  set -e
 
-    if [ -s "$target" ]; then
-      # Some WSD devices, including the validated Xerox, return NO_DOCS from
-      # the final sane_read after delivering a complete page. scanimage's
-      # batch mode discards that page; -o leaves it intact for us to keep.
-      if grep -qiE 'out of documents|no documents' "$OUTDIR/feeder.err"; then
-        return 0
-      fi
-      [ "$status" -eq 0 ] || return 1
-      index=$((index + 1))
-      continue
-    fi
+  actual=$(page_count)
+  reported=$(
+    tr '\r' '\n' < "$OUTDIR/feeder.err" |
+      sed -n 's/^Batch terminated, \([0-9][0-9]*\) pages\{0,1\} scanned$/\1/p' |
+      tail -n 1
+  )
 
-    rm -f "$target"
-    if grep -qiE 'out of documents|no documents' "$OUTDIR/feeder.err"; then
-      return 0
-    fi
+  # A WSD feeder job spans every loaded sheet. Starting one scanimage process
+  # per page consumes the whole job but returns only its first image on the
+  # validated Xerox. Batch mode keeps one SANE session open and emits every
+  # page. An empty feeder is the one non-zero outcome that is still clean.
+  # sane-airscan may count a page whose final read returned NO_DOCS even though
+  # scanimage discarded its output file. Never silently accept that mismatch.
+  if [ -n "$reported" ] && [ "$reported" -ne "$actual" ]; then
     return 1
-  done
+  fi
+  if [ "$status" -eq 0 ]; then
+    return 0
+  fi
+  if [ "$actual" -eq 0 ] && \
+      grep -qiE 'out of documents|no documents' "$OUTDIR/feeder.err"; then
+    return 0
+  fi
+  return 1
 }
 
 scan_flatbed() {
