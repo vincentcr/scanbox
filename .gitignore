@@ -6,3 +6,4 @@ scans/
 printer.env
 
 .DS_Store
+.claude/
