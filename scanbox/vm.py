@@ -75,7 +75,7 @@ def responsive() -> bool:
     return proc.run(shell_cmd("true"), timeout=15).ok
 
 
-def is_provisioned() -> bool:
+def is_hplip_provisioned() -> bool:
     if not proc.run(shell_cmd("test", "-x", GUEST_LIB + "/autofit.sh"), timeout=20).ok:
         return False
     # Any scan backend will do. HP ships bb_soap / bb_soapht / bb_marvell /
@@ -85,6 +85,21 @@ def is_provisioned() -> bool:
     probe = ('for f in /usr/share/hplip/scan/plugins/bb_*.so; '
              'do [ -e "$f" ] && exit 0; done; exit 1')
     return proc.run(shell_cmd("bash", "-c", probe), timeout=20).ok
+
+
+# Kept for callers outside the package that used the old HP-specific name.
+def is_provisioned() -> bool:
+    return is_hplip_provisioned()
+
+
+def is_wsd_provisioned() -> bool:
+    """Whether the guest has the SANE frontend and WSD-capable backend."""
+    check = (
+        "command -v scanimage >/dev/null && "
+        "dpkg-query -W -f='${Status}\\n' sane-airscan 2>/dev/null | "
+        "grep -qx 'install ok installed'"
+    )
+    return proc.run(shell_cmd("bash", "-c", check), timeout=20).ok
 
 
 def sync_lib() -> None:
@@ -111,7 +126,15 @@ def provision() -> None:
     ui.say("provisioning complete")
 
 
-def ensure() -> None:
+def provision_wsd() -> None:
+    ui.say("provisioning WSD scanning support (a minute or two)")
+    if not _logged(shell_cmd("sudo", "bash", "-s"), paths.PROVISION_AIRSCAN_SH):
+        ui.die("WSD package installation failed")
+    ui.say("WSD provisioning complete")
+
+
+def ensure_runtime() -> None:
+    """Create or start the guest without choosing or installing a backend."""
     require_lima()
     if not exists():
         ui.say("no scanbox VM yet -- creating it "
@@ -119,7 +142,6 @@ def ensure() -> None:
         if not _logged(["limactl", "start", "--name=" + NAME, "--tty=false",
                         paths.LIMA_CONFIG]):
             ui.die("could not create the VM")
-        provision()
         return
 
     if running():
@@ -134,10 +156,20 @@ def ensure() -> None:
             if not _logged(["limactl", "start", NAME, "--tty=false"]):
                 ui.die("could not start the VM")
 
-    if is_provisioned():
+def ensure() -> None:
+    """Ensure the existing HPLIP backend is available."""
+    ensure_runtime()
+    if is_hplip_provisioned():
         sync_lib()
     else:
         provision()
+
+
+def ensure_wsd() -> None:
+    """Ensure WSD support without installing or initializing HPLIP."""
+    ensure_runtime()
+    if not is_wsd_provisioned():
+        provision_wsd()
 
 
 def stop() -> None:

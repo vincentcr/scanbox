@@ -21,9 +21,11 @@ DEFAULT_OUT_DIR = os.environ.get("SCANBOX_OUT", os.path.expanduser("~/Pictures/S
 # which has no reason to grow a Python dependency, and guest-scan.sh in
 # particular is piped in over stdin so the VM never learns where this repo is.
 GUEST_SCAN_SH = os.path.join(ROOT, "lib", "guest-scan.sh")
+GUEST_WSD_SCAN_SH = os.path.join(ROOT, "lib", "guest-wsd-scan.sh")
 AUTOFIT_SH = os.path.join(ROOT, "lib", "autofit.sh")
 PROVISION_PACKAGES_SH = os.path.join(ROOT, "provision", "10-packages.sh")
 PROVISION_PLUGIN_SH = os.path.join(ROOT, "provision", "20-plugin.sh")
+PROVISION_AIRSCAN_SH = os.path.join(ROOT, "provision", "30-airscan.sh")
 LIMA_CONFIG = os.path.join(ROOT, "scanbox.yaml")
 
 VM_LOG = os.path.join(STATE_DIR, "lima.log")
