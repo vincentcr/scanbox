@@ -13,8 +13,8 @@ Lifecycle invariants matter because scanning moves physical paper:
 * ``ScanJob.result`` is side-effect-free and remains ``None`` until a complete
   result is available.
 
-These contracts are not wired into the production CLI yet.  Issue #7 defines
-the vocabulary that the native, WSD, and legacy implementations will share.
+The legacy HPLIP command now enters acquisition through these contracts; native
+and WSD routing will use the same vocabulary as they are wired into the CLI.
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass

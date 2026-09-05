@@ -22,6 +22,27 @@ printf 'complete png raster' > "$output"
 echo -ne 'Progress: 100.0%\r' >&2
 """
 
+BUSY_THEN_SUCCESS_SCANIMAGE = """\
+#!/bin/bash
+set -eu
+count=0
+[ ! -f "$SCANBOX_TEST_COUNT" ] || count=$(cat "$SCANBOX_TEST_COUNT")
+count=$((count + 1))
+printf '%s' "$count" > "$SCANBOX_TEST_COUNT"
+if [ "$count" -lt 3 ]; then
+  echo 'scanimage: sane_start: Error during device I/O' >&2
+  exit 1
+fi
+output=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) output="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf 'complete png raster' > "$output"
+"""
+
 
 class GuestLegacyRasterTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -60,6 +81,34 @@ class GuestLegacyRasterTests(unittest.TestCase):
         self.assertIn("RASTER {}\n".format(raster), result.stdout)
         self.assertNotIn("OUT ", result.stdout)
         self.assertTrue(os.path.isfile(raster))
+
+    def test_flatbed_retries_hplip_busy_session_before_succeeding(self) -> None:
+        fake = os.path.join(self.tools, "scanimage")
+        with open(fake, "w") as stream:
+            stream.write(textwrap.dedent(BUSY_THEN_SUCCESS_SCANIMAGE))
+        os.chmod(fake, 0o755)
+        count = os.path.join(self.root, "attempts")
+        self.env["SCANBOX_TEST_COUNT"] = count
+        self.env["SCANBOX_BUSY_TRIES"] = "3"
+        self.env["SCANBOX_BUSY_WAIT"] = "0"
+
+        result = subprocess.run(
+            [
+                "bash", paths.GUEST_SCAN_SH, "hpaio:/net/test", "Flatbed",
+                "Color", "300", "letter", "0", "name", "", "pdf",
+                "0", "0", "1",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            env=self.env,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with open(count) as stream:
+            self.assertEqual(stream.read(), "3")
+        self.assertEqual(result.stdout.count("NOTE the scanner is still busy"), 2)
+        self.assertIn("PAGES 1\n", result.stdout)
 
 
 if __name__ == "__main__":

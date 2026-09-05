@@ -1,9 +1,22 @@
 # Scanner backends
 
-Backends implement the normalized contracts in `scanbox.contracts`. The
-production CLI still uses the original HPLIP path while discovery and routing
-are migrated in issues #2 and #4. `scanbox.output` now owns backend-neutral
-smart format selection, naming, host-side assembly, and staged-page cleanup.
+Backends implement the normalized contracts in `scanbox.contracts`.
+`scanbox.output` owns backend-neutral smart format selection, naming,
+host-side assembly, and staged-page cleanup. Discovery and routing are still
+being migrated in issues #2 and #4.
+
+## Legacy HP through HPLIP
+
+`HPLIPBackend` encapsulates the existing configured-HP path. It owns
+`hp-makeuri`, `hpaio` device construction, HPLIP capability inspection, Lima
+lifecycle hooks, the guest scan protocol, stale-session handling, remote
+cancellation, and copying acquired PNG pages back to the host. It is
+constructed only when the compatibility CLI explicitly selects the configured
+legacy path; it does not advertise candidates during native discovery.
+
+The guest retains the HP M276-specific feeder trailing-edge measurement and
+HPLIP compression and busy-session behavior. Those accommodations therefore
+cannot leak into native ImageCapture or WSD acquisition.
 
 ## WSD through sane-airscan
 

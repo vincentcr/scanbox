@@ -120,8 +120,8 @@ run_scanimage() {
 # roughly 45 seconds, reporting a bare "Error during device I/O". Retrying quietly
 # through that window is the difference between "it works" and an error that reads
 # like the scanner is broken.
-DEVICE_BUSY_TRIES=6
-DEVICE_BUSY_WAIT=15
+DEVICE_BUSY_TRIES="${SCANBOX_BUSY_TRIES:-6}"
+DEVICE_BUSY_WAIT="${SCANBOX_BUSY_WAIT:-15}"
 
 busy_error() { grep -q "Error during device I/O" "$1" 2>/dev/null; }
 
