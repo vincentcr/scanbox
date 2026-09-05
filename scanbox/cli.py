@@ -8,7 +8,7 @@ import signal
 import sys
 from typing import List, Optional
 
-from . import config, discover, paths, scan, ui, vm
+from . import config, discover, paths, scan, selection, ui, vm
 
 USAGE = """\
 scanbox -- scan from the network MFP
@@ -18,6 +18,7 @@ scanbox -- scan from the network MFP
                             feeder  force the document feeder
                             bed     force the flatbed
   scanbox setup           find a scanner and save it as your config
+  scanbox scanners        list usable scanners on the current network
   scanbox status          VM state, config, resolved printer
   scanbox stop            stop the VM now
 
@@ -36,7 +37,9 @@ Options (for scan)
   --format F        choose the exact pdf|png|tiff|jpeg format
   --lossless        disable the scanner's in-transit JPEG compression
   --keep-alive MIN  idle minutes before the VM stops (default 60)
-  --printer HOST    override the configured scanner for this run"""
+  --scanner NAME    use a current-network scanner by name or stable ID;
+                    use auto to select or prompt without changing config
+  --printer HOST    legacy: override the configured HP host for this run"""
 
 # What the user types, and what SANE calls it.
 SOURCES = {"auto": "auto", "feeder": "ADF", "bed": "Flatbed", "flatbed": "Flatbed"}
@@ -96,7 +99,9 @@ def build_parser() -> _Parser:
     p.add_argument("--split", action="store_true")
     p.add_argument("--lossless", action="store_true")
     p.add_argument("--keep-alive", dest="keep_alive", type=int, default=60)
-    p.add_argument("--printer")
+    target = p.add_mutually_exclusive_group()
+    target.add_argument("--scanner")
+    target.add_argument("--printer")
 
     p = sub.add_parser("setup", add_help=False)
     _add_help(p)
@@ -104,6 +109,7 @@ def build_parser() -> _Parser:
     p.add_argument("--overwrite", action="store_true")
 
     _add_help(sub.add_parser("status", add_help=False))
+    _add_help(sub.add_parser("scanners", add_help=False))
     _add_help(sub.add_parser("stop", add_help=False))
 
     p = sub.add_parser("__idle-timer", add_help=False)
@@ -124,6 +130,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         lossless=args.lossless, name=args.name, fmt=args.fmt,
         image=args.image, split=args.split,
         out_dir=args.out_dir, keep_alive=args.keep_alive, printer=args.printer,
+        scanner=args.scanner,
     )
     for path in scan.run(opts):
         print(path)
@@ -231,6 +238,26 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_scanners(args: argparse.Namespace) -> int:
+    catalog = selection.current_network_catalog()
+    with ui.Spinner("searching for usable scanners on this network"):
+        inventory = catalog.discover()
+    for failure in inventory.failures:
+        ui.warn("{} discovery: {}".format(failure.backend, failure.message))
+    if not inventory.candidates:
+        print("No usable scanners found on this network.")
+        return 0
+    for index, candidate in enumerate(inventory.candidates):
+        if index:
+            print("")
+        scanner = candidate.scanner
+        print(scanner.name)
+        print("  id       {}".format(scanner.id))
+        print("  backend  {}".format(scanner.backend))
+        print("  endpoint {}".format(scanner.endpoint))
+    return 0
+
+
 def cmd_stop(args: argparse.Namespace) -> int:
     vm.require_lima()
     vm.stop()
@@ -239,7 +266,7 @@ def cmd_stop(args: argparse.Namespace) -> int:
 
 
 HANDLERS = {"scan": cmd_scan, "setup": cmd_setup,
-            "status": cmd_status, "stop": cmd_stop}
+            "scanners": cmd_scanners, "status": cmd_status, "stop": cmd_stop}
 
 
 def _on_term(signum, frame) -> None:

@@ -467,6 +467,10 @@ class WSDBackend(Backend):
             streaming_runner=self._run_streaming,
         )
 
+    def release(self, keep_alive: int) -> None:
+        """Keep the WSD guest warm for the configured idle period."""
+        vm.idle_timer_arm(keep_alive)
+
 
 class _WSDScanJob(ScanJob):
     def __init__(self, scanner: Scanner, request: ScanRequest,

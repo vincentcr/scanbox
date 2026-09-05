@@ -131,6 +131,15 @@ class WSDBackendTests(unittest.TestCase):
 
         self.backend = WSDBackend(ensure_guest=ensure, runner=self.runner)
 
+    def test_discovery_does_not_ensure_or_inspect_the_guest(self) -> None:
+        with mock.patch(
+            "scanbox.backends.wsd.discover_wsd", return_value=(scanner(),)
+        ) as discover:
+            self.assertEqual(self.backend.discover(), (scanner(),))
+        discover.assert_called_once_with(3.0)
+        self.assertEqual(self.ensure_count, 0)
+        self.assertEqual(self.runner.commands, [])
+
     def test_inspection_maps_xerox_sane_capabilities(self) -> None:
         capabilities = self.backend.inspect(scanner())
 
@@ -201,6 +210,11 @@ class WSDBackendTests(unittest.TestCase):
             "SANE_AIRSCAN_DEVICE=wsd:scanbox-wsd:"
             "http://192.0.2.25:5358/WSDScanner",
         )
+
+    def test_release_arms_the_shared_vm_idle_timer(self) -> None:
+        with mock.patch("scanbox.backends.wsd.vm.idle_timer_arm") as arm:
+            self.backend.release(17)
+        arm.assert_called_once_with(17)
 
 
 class WSDScanJobTests(unittest.TestCase):

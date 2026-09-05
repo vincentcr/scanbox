@@ -1,15 +1,17 @@
-"""User-facing compatibility adapter for one legacy HPLIP scan.
+"""User-facing scan orchestration over normalized acquisition backends.
 
-The HP protocol, VM orchestration, acquisition, cancellation, and guest
-summary parsing live in ``scanbox.backends.hplip``. This module retains the
-existing CLI policy and presentation until backend routing replaces it.
+The configured-default path remains the legacy HPLIP compatibility behavior.
+``--scanner`` instead builds a temporary current-network inventory and never
+reads or writes that default. Intelligent protocol preference remains the
+router's job; at this stage each discovered candidate already names its usable
+backend.
 """
 import os
 import shutil
 import time
 from typing import List, Optional, Tuple
 
-from . import config, discover, output, paths, ui
+from . import config, discover, output, paths, selection, ui
 from .backends.hplip import HPLIPBackend, HPLIPError
 from .contracts import BackendError, ScanMode, ScanRequest, ScanSource
 
@@ -98,7 +100,8 @@ class Options:
                  name: Optional[str] = None, fmt: Optional[str] = None,
                  image: bool = False, split: bool = False,
                  out_dir: Optional[str] = None, keep_alive: int = 60,
-                 printer: Optional[str] = None) -> None:
+                 printer: Optional[str] = None,
+                 scanner: Optional[str] = None) -> None:
         self.source = source
         self.mode = mode
         self.dpi = dpi
@@ -111,15 +114,10 @@ class Options:
         self.out_dir = out_dir or paths.DEFAULT_OUT_DIR
         self.keep_alive = keep_alive
         self.printer = printer
+        self.scanner = scanner
 
 
-def run(opts: Options) -> List[str]:
-    ip = resolve_printer(opts.printer)
-    if not ip:
-        ui.die("could not reach the configured scanner.\n"
-               "Is the printer on, and are you on its network? "
-               "Run 'scanbox setup' to look again.")
-
+def _legacy_target(opts: Options):
     discovery_spinner = None
 
     def discovery_event(kind: str, value: str) -> None:
@@ -131,10 +129,48 @@ def run(opts: Options) -> List[str]:
             discovery_spinner.stop()
             discovery_spinner = None
 
+    ip = resolve_printer(opts.printer)
+    if not ip:
+        ui.die("could not reach the configured scanner.\n"
+               "Is the printer on, and are you on its network? "
+               "Run 'scanbox setup' to look again, or use "
+               "'scanbox scan --scanner auto' on this network.")
     backend = HPLIPBackend(ip, on_event=discovery_event)
-    result = None
     try:
         scanner = backend.discover()[0]
+        return backend, scanner
+    finally:
+        if discovery_spinner is not None:
+            discovery_spinner.stop()
+
+
+def _current_network_target(opts: Options, catalog=None):
+    catalog = catalog or selection.current_network_catalog()
+    with ui.Spinner("searching for usable scanners on this network"):
+        inventory = catalog.discover()
+    for failure in inventory.failures:
+        ui.warn("{} discovery: {}".format(failure.backend, failure.message))
+    candidate = selection.select(
+        inventory.candidates,
+        opts.scanner or "auto",
+        interactive=ui.tty_readable(),
+        ask=ui.ask,
+        say=ui.say,
+    )
+    ui.say("using {} via {}".format(
+        candidate.scanner.name, candidate.scanner.backend
+    ))
+    return candidate.backend, candidate.scanner
+
+
+def run(opts: Options, *, catalog=None) -> List[str]:
+    backend = scanner = None
+    result = None
+    try:
+        if opts.scanner is not None:
+            backend, scanner = _current_network_target(opts, catalog)
+        else:
+            backend, scanner = _legacy_target(opts)
 
         name = opts.name or time.strftime("scan-%Y%m%d%H%M%S")
         msg = "scanning"
@@ -170,9 +206,9 @@ def run(opts: Options) -> List[str]:
             result = job.scan()
         display = None
 
-        for diagnostic in job.diagnostics:
+        for diagnostic in getattr(job, "diagnostics", ()):
             ui.say("  " + diagnostic)
-        for measurement in job.measurements:
+        for measurement in getattr(job, "measurements", ()):
             ui.say("  " + measurement)
 
         output_options = output.OutputOptions(
@@ -194,8 +230,10 @@ def run(opts: Options) -> List[str]:
                 result, output_options, on_event=on_output_event
             ))
 
-        backend.release(opts.keep_alive)
-        where = "feeder" if result.source is ScanSource.FEEDER else "flatbed"
+        release = getattr(backend, "release", None)
+        if release is not None:
+            release(opts.keep_alive)
+        where = result.source.value
         ui.say("{}, {} page(s)".format(where, len(result.pages)))
         if result.truncated:
             ui.say("")
@@ -209,7 +247,5 @@ def run(opts: Options) -> List[str]:
     except (BackendError, output.OutputError, ValueError) as error:
         ui.die(str(error))
     finally:
-        if discovery_spinner is not None:
-            discovery_spinner.stop()
         if result is not None and result.pages:
             shutil.rmtree(os.path.dirname(result.pages[0].path), ignore_errors=True)

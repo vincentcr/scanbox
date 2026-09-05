@@ -2,8 +2,11 @@
 
 Backends implement the normalized contracts in `scanbox.contracts`.
 `scanbox.output` owns backend-neutral smart format selection, naming,
-host-side assembly, and staged-page cleanup. Discovery and routing are still
-being migrated in issues #2 and #4.
+host-side assembly, and staged-page cleanup. `scanbox.selection` builds the
+current-network inventory by retaining only advertisements paired with a
+usable backend, and implements exact name/stable-ID and interactive selection.
+Grouping one physical device's multiple protocols and choosing among them
+remains routing work in issue #4.
 
 ## Legacy HP through HPLIP
 
@@ -45,3 +48,8 @@ Automatic source selection tries a compatible feeder first. It falls back to
 the flatbed only after an explicit empty-feeder response. An ambiguous error,
 jam, or partially acquired batch stops in the WSD backend; protocol routing
 must never retry through another backend after this boundary.
+
+`WSDBackend.discover()` is currently the production source for the temporary
+current-network catalog. It runs entirely on the host, without inspecting the
+device or touching the VM. Only after the CLI selects a candidate does
+`prepare()` ensure the WSD guest and inspect capabilities.

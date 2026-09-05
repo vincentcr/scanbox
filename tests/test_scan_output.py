@@ -6,8 +6,14 @@ import tempfile
 import unittest
 from unittest import mock
 
-from scanbox import scan
-from scanbox.contracts import ScanPage, ScanResult, ScanSource, Scanner
+from scanbox import config, scan, selection
+from scanbox.contracts import (
+    Backend,
+    ScanPage,
+    ScanResult,
+    ScanSource,
+    Scanner,
+)
 
 
 class FakeJob:
@@ -54,12 +60,75 @@ class FakeBackend:
         self.released.append(keep_alive)
 
 
+class DynamicBackend(Backend):
+    def __init__(self):
+        self.scanner = Scanner(
+            "wsd:stable-xerox", "Xerox test", "dynamic-test",
+            "http://192.0.2.25/ws/",
+        )
+        self.on_event = lambda _kind, _value: None
+        self.request = None
+        self.released = []
+
+    @property
+    def name(self):
+        return "dynamic-test"
+
+    def discover(self):
+        raise AssertionError("the supplied catalog already performed discovery")
+
+    def inspect(self, scanner):
+        raise AssertionError("fake backend does not need inspection")
+
+    def prepare(self, scanner, request):
+        self.request = request
+        return DynamicJob(DynamicBackend.page_root, scanner)
+
+    def release(self, keep_alive):
+        self.released.append(keep_alive)
+
+
+class DynamicJob:
+    def __init__(self, root, scanner):
+        self.root = root
+        self.scanner = scanner
+
+    @property
+    def result(self):
+        return None
+
+    def cancel(self):
+        pass
+
+    def scan(self):
+        path = os.path.join(self.root, "page-0001.png")
+        with open(path, "wb") as stream:
+            stream.write(b"png raster")
+        return ScanResult(
+            self.scanner.id, self.scanner.backend, ScanSource.FLATBED,
+            (ScanPage(1, path, "image/png", resolution=300),),
+        )
+
+
+class FakeCatalog:
+    def __init__(self, backend=None):
+        self.backend = backend
+
+    def discover(self):
+        if self.backend is None:
+            return selection.Inventory(())
+        return selection.Inventory((
+            selection.Candidate(self.backend.scanner, self.backend),
+        ))
+
+
 class LegacyScanOutputIntegrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = tempfile.mkdtemp(prefix="scanbox-scan-output-")
         self.pages = tempfile.mkdtemp(prefix="scanbox-scan-pages-")
         FakeBackend.instances = []
         FakeBackend.page_root = self.pages
+        DynamicBackend.page_root = self.pages
 
     def tearDown(self) -> None:
         shutil.rmtree(self.root, ignore_errors=True)
@@ -103,6 +172,44 @@ class LegacyScanOutputIntegrationTests(unittest.TestCase):
         self.assertIn("p0001: letter (measured 11.0in)", stderr.getvalue())
         self.assertIn("feeder, 2 page(s)", stderr.getvalue())
         self.assertIn("WARNING: the feeder stopped early", stderr.getvalue())
+
+    def test_dynamic_selection_bypasses_and_preserves_config(self):
+        config_path = os.path.join(self.root, "config")
+        original = b"# keep comments byte-for-byte\nPRINTER_HOST=home-scanner.local\n"
+        with open(config_path, "wb") as stream:
+            stream.write(original)
+        backend = DynamicBackend()
+
+        def assemble(result, options, on_event=None):
+            return (os.path.join(options.out_dir, options.name + ".pdf"),)
+
+        options = scan.Options(
+            scanner="Xerox test", out_dir=self.root, name="away-from-home"
+        )
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), \
+                mock.patch.object(config, "CONFIG_FILE", config_path), \
+                mock.patch.object(scan, "resolve_printer") as legacy_resolver, \
+                mock.patch.object(scan.ui, "tty_readable", return_value=False), \
+                mock.patch.object(scan.output, "assemble", side_effect=assemble):
+            outputs = scan.run(options, catalog=FakeCatalog(backend))
+
+        legacy_resolver.assert_not_called()
+        with open(config_path, "rb") as stream:
+            self.assertEqual(stream.read(), original)
+        self.assertEqual(outputs, [os.path.join(self.root, "away-from-home.pdf")])
+        self.assertEqual(backend.request.scanner_id, "wsd:stable-xerox")
+        self.assertEqual(backend.released, [60])
+        self.assertIn("using Xerox test via dynamic-test", stderr.getvalue())
+
+    def test_dynamic_selection_reports_no_current_network_scanner_cleanly(self):
+        options = scan.Options(scanner="auto", out_dir=self.root)
+        with contextlib.redirect_stderr(io.StringIO()), \
+                mock.patch.object(scan.ui, "tty_readable", return_value=False):
+            with self.assertRaisesRegex(
+                scan.ui.ScanboxError, "no usable scanners found on this network"
+            ):
+                scan.run(options, catalog=FakeCatalog())
 
 
 if __name__ == "__main__":

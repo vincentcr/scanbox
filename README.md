@@ -79,6 +79,8 @@ nothing is written until the whole flow completes. `--host=NAME` skips discovery
 scanbox scan                   # feeder if loaded, else the bed
 scanbox scan feeder            # force the document feeder
 scanbox scan bed               # force the flatbed
+scanbox scanners               # list usable scanners on this LAN
+scanbox scan --scanner auto    # use this LAN, not the configured default
 scanbox setup                  # find a scanner and save it as your config
 scanbox status                 # VM state, config, resolved address
 scanbox stop                   # stop the VM now
@@ -102,7 +104,14 @@ chosen extension (and a page number when a scan is split).
 | `--format F` | explicitly choose `pdf`\|`png`\|`tiff`\|`jpeg`; cannot be combined with `--image` |
 | `--lossless` | disable the scanner's in-transit JPEG compression (slow — see below) |
 | `--keep-alive MIN` | idle minutes before the VM stops (default 60) |
-| `--printer HOST` | override the configured scanner for one run |
+| `--scanner NAME` | temporarily use a current-LAN scanner by exact name or stable ID; `auto` uses the only match or prompts |
+| `--printer HOST` | legacy compatibility override for the configured HP path |
+
+`--scanner` is deliberately temporary: discovery and selection never read,
+replace, or otherwise edit the configured default. If several usable scanners
+are present, an interactive command prompts; a noninteractive command lists the
+candidates and fails rather than guessing. `--scanner` and the legacy
+`--printer` override are mutually exclusive.
 
 A feeder run normally collates into one PDF. `--split` writes one PDF per page
 instead. In either case, **each sheet is sized from its own trailing edge** — feed
@@ -137,9 +146,17 @@ the only trustworthy signal.
 
 **2. Discovery happens on the host, never in the guest.**
 Multicast does not cross Lima's vzNAT boundary, so `scanimage -L` inside the VM finds
-nothing. All Bonjour work is done by macOS (`scanbox/discover.py`) and only a plain IPv4
-address is passed in. `_scanner._tcp` is the right service type — close to exactly the
-set `hpaio` can drive, and its TXT record carries the model and `feeder=T`/`flatbed=T`.
+nothing. Legacy HP setup does its Bonjour work in macOS (`scanbox/discover.py`) and
+passes only a plain IPv4 address into HPLIP. Dynamic current-LAN discovery sends
+WS-Discovery probes from macOS and passes the chosen device's explicit endpoint into
+the WSD guest backend; this is why the WSD-only Xerox works even though multicast
+cannot reach the VM.
+
+The current-network catalog only offers advertisements for which scanbox has a usable
+backend. `scanbox scanners` and `scanbox scan --scanner auto` do not start the VM;
+the selected WSD backend starts it later, while inspecting capabilities before the
+actual scan. Native ImageCapture/eSCL candidates will join the same catalog when that
+acquisition backend is available.
 
 This is also why the printer is configured by **mDNS name** rather than IP: the name
 derives from the printer's MAC, so it survives DHCP moving the address.
