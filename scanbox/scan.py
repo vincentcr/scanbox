@@ -34,7 +34,13 @@ def lossless_estimate(dpi: int, mode: str, page: str) -> Tuple[int, int]:
 
 
 def resolve_printer(override: Optional[str] = None) -> Optional[str]:
-    """The configured scanner's IPv4 address, or None if it will not resolve."""
+    """Resolve the configured scanner's locator for the legacy backend.
+
+    Stable identity is deliberately not interpreted here; the router will use
+    it to match fresh advertisements. Until then, the compatibility path
+    resolves the saved hostname on every scan and only uses a fixed address
+    when no hostname is available.
+    """
     host = ip = ""
     if override:
         if discover.is_ipv4(override):
@@ -42,15 +48,18 @@ def resolve_printer(override: Optional[str] = None) -> Optional[str]:
         else:
             host = override
     else:
-        values = config.load()
-        ip = values.get("PRINTER_IP", "")
-        host = values.get("PRINTER_HOST", "")
+        configured = config.load_scanner(migrate=True)
+        if configured is not None:
+            host = configured.host or ""
+            ip = configured.address or ""
 
     if not ip and not host:
         ui.die("no scanner configured yet. Run:\n\n    scanbox setup")
-    if not ip:
+    if host:
         with ui.Spinner("looking up {}".format(host)):
-            ip = discover.resolve_ipv4(host) or ""
+            resolved = discover.resolve_ipv4(host) or ""
+        if resolved:
+            ip = resolved
     return ip or None
 
 

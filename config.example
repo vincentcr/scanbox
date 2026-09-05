@@ -1,8 +1,19 @@
-# Copy to ~/.config/scanbox/config
-#
-# PRINTER_HOST is the scanner's Bonjour name, derived from its MAC address, so it
-# survives DHCP moving the IP. Prefer it. Run `scanner find` to discover it.
-PRINTER_HOST=NPIXXXXXX.local
+# Copy to ~/.config/scanbox/config, or let `scanbox setup` write it.
+# SCANNER_ID is an advertised UUID, persistent ID, or serial number. It names
+# the physical scanner and does not contain its current IP address.
+SCANNER_ID=uuid:5de90400-1dd2-11b2-84bc-9c934e010299
+SCANNER_NAME=Office scanner
 
-# Optional: skip mDNS entirely and use a fixed address.
-#PRINTER_IP=192.168.1.50
+# The hostname is a fallback locator and is resolved again for every scan, so
+# DHCP address changes do not change the configured scanner.
+SCANNER_HOST=office-scanner.local
+
+# auto lets scanbox choose a usable protocol. native, wsd, and legacy are also
+# accepted as explicit preferences for the backend router.
+SCANNER_PROTOCOL=auto
+
+# A fixed address is supported when the device has no resolvable hostname.
+#SCANNER_ADDRESS=192.168.1.50
+
+# Existing PRINTER_HOST and PRINTER_IP configurations are still accepted and
+# are atomically migrated when the configured scanner is next used.

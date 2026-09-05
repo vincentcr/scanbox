@@ -1,3 +1,5 @@
+import contextlib
+import io
 import unittest
 from unittest import mock
 
@@ -27,6 +29,33 @@ class ScanTargetArgumentTests(unittest.TestCase):
 
     def test_scanners_command_is_registered(self):
         self.assertEqual(cli.build_parser().parse_args(["scanners"]).cmd, "scanners")
+
+
+class SetupIdentityTests(unittest.TestCase):
+    def test_discovered_stable_identity_and_hostname_are_saved(self):
+        found = cli.discover.Instance(
+            "Xerox instance", "xerox.local", {
+                "ty": "Xerox WorkCentre 6605DN",
+                "UUID": "5DE90400-1DD2-11B2-84BC-9C934E010299",
+            },
+        )
+        with contextlib.redirect_stderr(io.StringIO()), \
+                mock.patch.object(cli.config, "exists", return_value=False), \
+                mock.patch.object(cli.discover, "instances", return_value=[found.name]), \
+                mock.patch.object(cli.discover, "resolve_instance", return_value=found), \
+                mock.patch.object(cli.discover, "resolve_ipv4", return_value="192.0.2.52"), \
+                mock.patch.object(cli.ui, "tty_readable", return_value=True), \
+                mock.patch.object(cli.ui, "ask", return_value=""), \
+                mock.patch.object(cli.config, "save") as save:
+            self.assertEqual(cli.main(["setup"]), 0)
+
+        configured = save.call_args.args[0]
+        self.assertEqual(
+            configured.id, "uuid:5de90400-1dd2-11b2-84bc-9c934e010299"
+        )
+        self.assertEqual(configured.name, "Xerox WorkCentre 6605DN")
+        self.assertEqual(configured.host, "xerox.local")
+        self.assertEqual(configured.protocol, "auto")
 
 
 if __name__ == "__main__":

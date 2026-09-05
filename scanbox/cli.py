@@ -155,6 +155,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         ui.say("")
 
     host = args.host or ""
+    configured = None
     if not host:
         with ui.Spinner("searching for scanners on the network"):
             names = discover.instances(5)
@@ -190,23 +191,36 @@ def cmd_setup(args: argparse.Namespace) -> int:
             if choice.isdigit() and 1 <= int(choice) <= count:
                 break
             ui.say("  please enter a number between 1 and {}".format(count))
-        host = found[int(choice) - 1].host or ""
+        chosen = found[int(choice) - 1]
+        host = chosen.host or ""
         if not host:
             ui.die("that scanner did not resolve to a hostname; "
                    "re-run with --host=<hostname>.")
+        configured = config.ConfiguredScanner(
+            id=chosen.stable_id,
+            name=chosen.model,
+            host=host,
+            protocol="auto",
+        )
         ui.say("")
+
+    if configured is None:
+        if discover.is_ipv4(host):
+            configured = config.ConfiguredScanner(address=host, protocol="auto")
+        else:
+            configured = config.ConfiguredScanner(host=host, protocol="auto")
 
     # Confirm it is actually reachable, but do not refuse to save if it is not
     # -- setting this up while away from the printer's network is legitimate.
     with ui.Spinner("checking {}".format(host)):
-        ip = discover.resolve_ipv4(host)
+        ip = host if discover.is_ipv4(host) else discover.resolve_ipv4(host)
     if ip:
         ui.say("{} resolves to {}".format(host, ip))
     else:
         ui.warn("note: {} does not resolve from here. Saving anyway -- it should "
                 "work\n      once you are back on the printer's network.".format(host))
 
-    config.save(host)
+    config.save(configured)
     ui.say("")
     ui.say("Saved to {}. Scan with:".format(config.display_path()))
     ui.say("")
@@ -220,7 +234,14 @@ def cmd_status(args: argparse.Namespace) -> int:
     print("config      {}".format(
         config.path() if config.exists() else "none -- run: scanbox setup"))
     if config.exists():
-        print("printer     {}".format(config.printer_label() or "unset"))
+        configured = config.load_scanner(migrate=True)
+        print("scanner     {}".format(
+            configured.label if configured is not None else "unset"))
+        if configured is not None:
+            print("identity    {}".format(configured.id or "<not advertised>"))
+            print("protocol    {}".format(configured.protocol))
+            print("locator     {}".format(
+                configured.locator or "<discover by identity>"))
         # Not being able to resolve is a normal thing for status to report, not
         # a reason to abort before printing the rest.
         try:

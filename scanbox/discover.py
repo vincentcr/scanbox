@@ -10,6 +10,7 @@ and its TXT record carries the model and feeder/flatbed capability.
 """
 import re
 from typing import Dict, List, Optional
+import uuid
 
 from . import proc
 
@@ -59,6 +60,30 @@ class Instance:
     @property
     def has_feeder(self) -> bool:
         return self.txt.get("feeder") == "T"
+
+    @property
+    def stable_id(self) -> Optional[str]:
+        """Best device identity advertised by Bonjour, if there is one."""
+        values = {key.casefold(): value for key, value in self.txt.items()}
+        for key in ("uuid", "device-uuid", "device_uuid"):
+            value = values.get(key, "").strip()
+            if not value:
+                continue
+            raw = (
+                value[len("urn:uuid:"):]
+                if value.lower().startswith("urn:uuid:") else value
+            )
+            try:
+                parsed = uuid.UUID(raw)
+            except ValueError:
+                # An advertised non-UUID must not become a persistent identity.
+                continue
+            return "uuid:" + str(parsed)
+        for key in ("serial", "serialnumber", "serial-number", "sn"):
+            value = values.get(key, "").strip()
+            if value:
+                return "serial:" + value
+        return None
 
 
 def resolve_instance(name: str) -> Instance:

@@ -119,6 +119,16 @@ two letter pages and a legal one and you get pages with the corresponding sizes.
 Every page is kept, blanks included.
 
 Config lives at `~/.config/scanbox/config` (see `config.example`) and is not committed.
+New configurations keep the scanner's advertised UUID, persistent ID, or serial
+number separate from its hostname or fixed address. The hostname is resolved again
+at scan time, so a DHCP address change does not alter the scanner's identity.
+Protocol preference defaults to `auto`; `native`, `wsd`, and `legacy` are valid
+explicit values for the backend router.
+
+Existing files containing `PRINTER_HOST` or `PRINTER_IP` continue to work. On the
+next configured scan or `scanbox status`, scanbox replaces that legacy file with the
+backend-neutral schema using an atomic write. A current-network scan selected with
+`--scanner` neither reads nor migrates the configured default.
 
 ## The non-obvious parts
 
