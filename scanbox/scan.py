@@ -1,10 +1,8 @@
 """User-facing scan orchestration over normalized acquisition backends.
 
-The configured-default path remains the legacy HPLIP compatibility behavior.
-``--scanner`` instead builds a temporary current-network inventory and never
-reads or writes that default. Intelligent protocol preference remains the
-router's job; at this stage each discovered candidate already names its usable
-backend.
+Configured scans are prepared by the protocol router. ``--scanner`` instead
+builds a temporary current-network inventory and never reads or writes that
+default; ``--printer`` remains an explicit legacy compatibility path.
 """
 import os
 import shutil
@@ -14,6 +12,7 @@ from typing import List, Optional, Tuple
 from . import config, discover, output, paths, selection, ui
 from .backends.hplip import HPLIPBackend, HPLIPError
 from .contracts import BackendError, ScanMode, ScanRequest, ScanSource
+from .routing import Router
 
 LOSSLESS_RATE = 550000
 PAGE_INCHES = {
@@ -110,7 +109,8 @@ class Options:
                  image: bool = False, split: bool = False,
                  out_dir: Optional[str] = None, keep_alive: int = 60,
                  printer: Optional[str] = None,
-                 scanner: Optional[str] = None) -> None:
+                 scanner: Optional[str] = None,
+                 protocol: Optional[str] = None) -> None:
         self.source = source
         self.mode = mode
         self.dpi = dpi
@@ -124,9 +124,18 @@ class Options:
         self.keep_alive = keep_alive
         self.printer = printer
         self.scanner = scanner
+        self.protocol = protocol
 
 
-def _legacy_target(opts: Options):
+class _EventRelay:
+    def __init__(self, target) -> None:
+        self.target = target
+
+    def __call__(self, kind: str, value: str) -> None:
+        self.target(kind, value)
+
+
+def _target_events():
     discovery_spinner = None
 
     def discovery_event(kind: str, value: str) -> None:
@@ -138,22 +147,27 @@ def _legacy_target(opts: Options):
             discovery_spinner.stop()
             discovery_spinner = None
 
+    return discovery_event, lambda: discovery_spinner
+
+
+def _legacy_target(opts: Options, on_event):
     ip = resolve_printer(opts.printer)
     if not ip:
         ui.die("could not reach the configured scanner.\n"
                "Is the printer on, and are you on its network? "
                "Run 'scanbox setup' to look again, or use "
                "'scanbox scan --scanner auto' on this network.")
-    backend = HPLIPBackend(ip, on_event=discovery_event)
-    try:
-        scanner = backend.discover()[0]
-        return backend, scanner
-    finally:
-        if discovery_spinner is not None:
-            discovery_spinner.stop()
+    backend = HPLIPBackend(ip, on_event=on_event)
+    scanner = backend.discover()[0]
+    return backend, scanner
 
 
 def _current_network_target(opts: Options, catalog=None):
+    if opts.protocol == "native":
+        ui.die("native scanning is not available yet; use auto or wsd")
+    if opts.protocol == "legacy":
+        ui.die("legacy protocol cannot discover a temporary current-LAN scanner; "
+               "use the configured scanner or --printer HOST")
     catalog = catalog or selection.current_network_catalog()
     with ui.Spinner("searching for usable scanners on this network"):
         inventory = catalog.discover()
@@ -172,14 +186,63 @@ def _current_network_target(opts: Options, catalog=None):
     return candidate.backend, candidate.scanner
 
 
-def run(opts: Options, *, catalog=None) -> List[str]:
+def _request(opts: Options, scanner_id: str) -> ScanRequest:
+    return ScanRequest(
+        scanner_id,
+        source=ScanSource.parse(opts.source),
+        mode=ScanMode.parse(opts.mode),
+        resolution=opts.dpi,
+        page_size=opts.page,
+        lossless=opts.lossless,
+    )
+
+
+def _configured_route(opts: Options, *, router=None, on_event=None):
+    configured = config.load_scanner(migrate=True)
+    if configured is None:
+        ui.die("no scanner configured yet. Run:\n\n    scanbox setup")
+    request = _request(
+        opts, configured.id or configured.locator or "configured-scanner"
+    )
+    router = router or Router(on_event=on_event)
+    route = router.prepare(configured, request, preference=opts.protocol)
+    for diagnostic in route.diagnostics:
+        ui.say("  routing: " + diagnostic)
+    ui.say("using {} via {} ({})".format(
+        route.scanner.name, route.protocol, route.backend.name
+    ))
+    return route
+
+
+def run(opts: Options, *, catalog=None, router=None) -> List[str]:
     backend = scanner = None
     result = None
+    display = None
+    target_event, active_spinner = _target_events()
+    relay = _EventRelay(target_event)
+
+    def on_event(kind: str, value: str) -> None:
+        if display is not None:
+            display(kind, value)
+
     try:
-        if opts.scanner is not None:
-            backend, scanner = _current_network_target(opts, catalog)
-        else:
-            backend, scanner = _legacy_target(opts)
+        try:
+            if opts.scanner is not None:
+                backend, scanner = _current_network_target(opts, catalog)
+                request = _request(opts, scanner.id)
+                backend.on_event = relay
+                job = backend.prepare(scanner, request)
+            elif opts.printer is not None:
+                backend, scanner = _legacy_target(opts, relay)
+                request = _request(opts, scanner.id)
+                job = backend.prepare(scanner, request)
+            else:
+                route = _configured_route(opts, router=router, on_event=relay)
+                backend, scanner, job = route.backend, route.scanner, route.job
+        finally:
+            spinner = active_spinner()
+            if spinner is not None:
+                spinner.stop()
 
         name = opts.name or time.strftime("scan-%Y%m%d%H%M%S")
         msg = "scanning"
@@ -194,22 +257,8 @@ def run(opts: Options, *, catalog=None) -> List[str]:
                     est_mb, est_secs // 60
                 )
 
-        request = ScanRequest(
-            scanner.id,
-            source=ScanSource.parse(opts.source),
-            mode=ScanMode.parse(opts.mode),
-            resolution=opts.dpi,
-            page_size=opts.page,
-            lossless=opts.lossless,
-        )
-        display = None
-
-        def on_event(kind: str, value: str) -> None:
-            if display is not None:
-                display(kind, value)
-
-        backend.on_event = on_event
-        job = backend.prepare(scanner, request)
+        relay.target = on_event
+        backend.on_event = relay
         with ui.Spinner(msg) as spinner:
             display = ProgressDisplay(spinner, msg)
             result = job.scan()

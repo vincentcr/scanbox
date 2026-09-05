@@ -344,6 +344,15 @@ class WSDBackend(Backend):
     def discover(self) -> Sequence[Scanner]:
         return discover_wsd(self.discovery_seconds)
 
+    def matches_locator(self, scanner: Scanner,
+                        locators: Sequence[str]) -> bool:
+        """Match host/address fallbacks without exposing WSD URLs to routing."""
+        self._check_scanner(scanner)
+        endpoint_host = (urlsplit(scanner.endpoint).hostname or "").rstrip(".").casefold()
+        return endpoint_host in {
+            value.rstrip(".").casefold() for value in locators if value
+        }
+
     def _check_scanner(self, scanner: Scanner) -> None:
         if not isinstance(scanner, Scanner) or scanner.backend != self.name:
             raise ValueError("scanner does not belong to the WSD backend")

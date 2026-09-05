@@ -39,6 +39,7 @@ Options (for scan)
   --keep-alive MIN  idle minutes before the VM stops (default 60)
   --scanner NAME    use a current-network scanner by name or stable ID;
                     use auto to select or prompt without changing config
+  --protocol P      override auto|wsd|legacy|native for this run
   --printer HOST    legacy: override the configured HP host for this run"""
 
 # What the user types, and what SANE calls it.
@@ -102,6 +103,7 @@ def build_parser() -> _Parser:
     target = p.add_mutually_exclusive_group()
     target.add_argument("--scanner")
     target.add_argument("--printer")
+    p.add_argument("--protocol", choices=config.PROTOCOLS)
 
     p = sub.add_parser("setup", add_help=False)
     _add_help(p)
@@ -124,13 +126,15 @@ def cmd_scan(args: argparse.Namespace) -> int:
     if args.lossless and args.fmt == "jpeg":
         ui.warn("--lossless with --format jpeg pays for an uncompressed transfer "
                 "and then re-compresses it on disk anyway. Proceeding.")
+    if args.printer and args.protocol not in (None, "legacy"):
+        ui.die("--printer is the explicit legacy path; use --protocol legacy or omit it")
     dpi = args.dpi if args.dpi is not None else (600 if args.image else 300)
     opts = scan.Options(
         source=SOURCES[args.source], mode=args.mode, dpi=dpi, page=args.page,
         lossless=args.lossless, name=args.name, fmt=args.fmt,
         image=args.image, split=args.split,
         out_dir=args.out_dir, keep_alive=args.keep_alive, printer=args.printer,
-        scanner=args.scanner,
+        scanner=args.scanner, protocol=args.protocol,
     )
     for path in scan.run(opts):
         print(path)

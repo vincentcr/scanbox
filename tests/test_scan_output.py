@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from scanbox import config, scan, selection
+from scanbox import config, routing, scan, selection
 from scanbox.contracts import (
     Backend,
     ScanPage,
@@ -122,6 +122,33 @@ class FakeCatalog:
         ))
 
 
+class FakeRouter:
+    def __init__(self, backend):
+        self.backend = backend
+        self.configured = None
+        self.request = None
+        self.preference = None
+
+    def prepare(self, configured, request, preference=None):
+        self.configured = configured
+        self.request = request
+        self.preference = preference
+        prepared = request.__class__(
+            self.backend.scanner.id,
+            source=request.source,
+            mode=request.mode,
+            resolution=request.resolution,
+            page_size=request.page_size,
+            lossless=request.lossless,
+        )
+        self.backend.request = prepared
+        job = DynamicJob(DynamicBackend.page_root, self.backend.scanner)
+        return routing.PreparedRoute(
+            "wsd", self.backend, self.backend.scanner, job,
+            ("selected protocol wsd for test",),
+        )
+
+
 class LegacyScanOutputIntegrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = tempfile.mkdtemp(prefix="scanbox-scan-output-")
@@ -144,6 +171,7 @@ class LegacyScanOutputIntegrationTests(unittest.TestCase):
         options = scan.Options(
             source="ADF", mode="Lineart", dpi=600, image=True,
             out_dir=self.root, name="documents", keep_alive=17,
+            printer="home-scanner.local",
         )
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr), \
@@ -210,6 +238,34 @@ class LegacyScanOutputIntegrationTests(unittest.TestCase):
                 scan.ui.ScanboxError, "no usable scanners found on this network"
             ):
                 scan.run(options, catalog=FakeCatalog())
+
+    def test_configured_scan_uses_router_and_cli_protocol_override(self):
+        config_path = os.path.join(self.root, "config")
+        configured = config.ConfiguredScanner(
+            id="uuid:5de90400-1dd2-11b2-84bc-9c934e010299",
+            name="Office scanner", host="office.local",
+        )
+        with mock.patch.object(config, "CONFIG_FILE", config_path):
+            config.save(configured)
+        backend = DynamicBackend()
+        router = FakeRouter(backend)
+        options = scan.Options(
+            protocol="wsd", out_dir=self.root, name="configured"
+        )
+
+        with contextlib.redirect_stderr(io.StringIO()), \
+                mock.patch.object(config, "CONFIG_FILE", config_path), \
+                mock.patch.object(scan, "resolve_printer") as legacy_resolver, \
+                mock.patch.object(scan.output, "assemble", return_value=(
+                    os.path.join(self.root, "configured.pdf"),
+                )):
+            outputs = scan.run(options, router=router)
+
+        legacy_resolver.assert_not_called()
+        self.assertEqual(outputs, [os.path.join(self.root, "configured.pdf")])
+        self.assertEqual(router.configured, configured)
+        self.assertEqual(router.preference, "wsd")
+        self.assertEqual(router.request.scanner_id, configured.id)
 
 
 if __name__ == "__main__":

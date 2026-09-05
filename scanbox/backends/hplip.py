@@ -44,6 +44,7 @@ StreamingRunner = Callable[..., proc.Result]
 
 _OPTION_RE = re.compile(r"^\s*(?:-[A-Za-z],\s*)?--([\w-]+)\s+(.+?)\s*$")
 _RANGE_RE = re.compile(r"^(\d+)\.\.(\d+)(?:dpi)?(?:\s+\(in steps of\s+(\d+))?.*$")
+_HP_NAME_RE = re.compile(r"\b(?:hp|hewlett(?:[ -]packard)?)\b", re.IGNORECASE)
 
 
 class HPLIPError(BackendError):
@@ -126,6 +127,24 @@ def _mode_name(mode: ScanMode) -> str:
 def _scanner_name(uri: str) -> str:
     model = uri.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
     return model.replace("_", " ") or "HP scanner"
+
+
+def supports_configured(scanner) -> bool:
+    """Whether a saved physical identity is a plausible HPLIP target.
+
+    Old configurations contain only a hostname or address, so they must be
+    probed to preserve compatibility.  New configurations normally include a
+    model name; a positively identified non-HP device must not trigger HPLIP
+    provisioning merely because another protocol failed.  Keeping this vendor
+    rule here prevents HP knowledge from leaking into the shared router.
+    """
+    identity = (getattr(scanner, "id", None) or "").strip().lower()
+    name = (getattr(scanner, "name", None) or "").strip()
+    if identity.startswith("hpaio:"):
+        return True
+    if not name:
+        return True
+    return bool(_HP_NAME_RE.search(name))
 
 
 class HPLIPBackend(Backend):

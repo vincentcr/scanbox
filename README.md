@@ -105,6 +105,7 @@ chosen extension (and a page number when a scan is split).
 | `--lossless` | disable the scanner's in-transit JPEG compression (slow — see below) |
 | `--keep-alive MIN` | idle minutes before the VM stops (default 60) |
 | `--scanner NAME` | temporarily use a current-LAN scanner by exact name or stable ID; `auto` uses the only match or prompts |
+| `--protocol P` | override the configured `auto`\|`wsd`\|`legacy` preference for this run; `native` currently reports unavailable |
 | `--printer HOST` | legacy compatibility override for the configured HP path |
 
 `--scanner` is deliberately temporary: discovery and selection never read,
@@ -112,6 +113,13 @@ replace, or otherwise edit the configured default. If several usable scanners
 are present, an interactive command prompts; a noninteractive command lists the
 candidates and fails rather than guessing. `--scanner` and the legacy
 `--printer` override are mutually exclusive.
+
+For a configured scanner, `auto` first looks for the same stable identity over
+WSD, falling back to its hostname or address only when necessary. A matching WSD
+device is prepared through sane-airscan. A supported legacy device can fall back
+to its vendor backend if WSD is absent or fails while discovery and capability
+inspection are still read-only. Once acquisition begins and paper may have moved,
+scanbox never retries through another protocol.
 
 A feeder run normally collates into one PDF. `--split` writes one PDF per page
 instead. In either case, **each sheet is sized from its own trailing edge** — feed
@@ -122,8 +130,9 @@ Config lives at `~/.config/scanbox/config` (see `config.example`) and is not com
 New configurations keep the scanner's advertised UUID, persistent ID, or serial
 number separate from its hostname or fixed address. The hostname is resolved again
 at scan time, so a DHCP address change does not alter the scanner's identity.
-Protocol preference defaults to `auto`; `native`, `wsd`, and `legacy` are valid
-explicit values for the backend router.
+Protocol preference defaults to `auto`; `wsd` and `legacy` force a backend, and
+`native` is reserved but reports clearly that native acquisition is not yet
+available. `--protocol` temporarily overrides the saved preference.
 
 Existing files containing `PRINTER_HOST` or `PRINTER_IP` continue to work. On the
 next configured scan or `scanbox status`, scanbox replaces that legacy file with the

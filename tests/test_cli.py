@@ -30,6 +30,17 @@ class ScanTargetArgumentTests(unittest.TestCase):
     def test_scanners_command_is_registered(self):
         self.assertEqual(cli.build_parser().parse_args(["scanners"]).cmd, "scanners")
 
+    def test_protocol_override_is_passed_to_scan_options(self):
+        with mock.patch.object(cli.scan, "run", return_value=[]) as run:
+            self.assertEqual(cli.main(["scan", "--protocol", "wsd"]), 0)
+        self.assertEqual(run.call_args.args[0].protocol, "wsd")
+
+    def test_printer_rejects_a_nonlegacy_protocol(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main([
+                "scan", "--printer", "old-hp.local", "--protocol", "wsd"
+            ]), 1)
+
 
 class SetupIdentityTests(unittest.TestCase):
     def test_discovered_stable_identity_and_hostname_are_saved(self):

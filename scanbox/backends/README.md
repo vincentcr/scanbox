@@ -5,8 +5,15 @@ Backends implement the normalized contracts in `scanbox.contracts`.
 host-side assembly, and staged-page cleanup. `scanbox.selection` builds the
 current-network inventory by retaining only advertisements paired with a
 usable backend, and implements exact name/stable-ID and interactive selection.
-Grouping one physical device's multiple protocols and choosing among them
-remains routing work in issue #4.
+
+`scanbox.routing` owns configured-device routing. It normalizes UUID and serial
+spellings so advertisements from different protocols can be grouped without
+using weak names or IP addresses as identity. In `auto` mode it prefers WSD,
+matches the saved stable identity before consulting a hostname/address, and
+only considers a vendor-owned legacy backend while preparation is still
+read-only. The returned job is the boundary: errors from `ScanJob.scan()` are
+never routed to another protocol. Route diagnostics record why protocols were
+accepted or rejected and name both the selected protocol and implementation.
 
 ## Legacy HP through HPLIP
 
@@ -14,8 +21,8 @@ remains routing work in issue #4.
 `hp-makeuri`, `hpaio` device construction, HPLIP capability inspection, Lima
 lifecycle hooks, the guest scan protocol, stale-session handling, remote
 cancellation, and copying acquired PNG pages back to the host. It is
-constructed only when the compatibility CLI explicitly selects the configured
-legacy path; it does not advertise candidates during native discovery.
+constructed only when routing selects the legacy path or the compatibility CLI
+uses `--printer`; it does not advertise candidates during host discovery.
 
 The guest retains the HP M276-specific feeder trailing-edge measurement and
 HPLIP compression and busy-session behavior. Those accommodations therefore
