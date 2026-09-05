@@ -218,7 +218,8 @@ retries through that window rather than failing.
 The host side is Python — standard library only, no virtualenv, nothing to install
 beyond an interpreter. It targets **3.9**, which is what the macOS Command Line Tools
 ship, and Homebrew requires those anyway, so a Mac that can install this can already
-run it.
+run it. Output assembly uses macOS's built-in `sips`, `tiffutil`, and Combine PDF
+Pages action; it does not add a Python imaging dependency.
 
 Everything that runs *inside* the VM stays shell (`lib/guest-scan.sh`, `lib/autofit.sh`,
 `provision/`). Those are piped in over stdin, so the VM never learns where this repo

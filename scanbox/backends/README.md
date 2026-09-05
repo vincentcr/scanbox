@@ -1,8 +1,9 @@
 # Scanner backends
 
 Backends implement the normalized contracts in `scanbox.contracts`. The
-production CLI still uses the original HPLIP path while discovery, routing, and
-output assembly are migrated in issues #2, #4, and #8.
+production CLI still uses the original HPLIP path while discovery and routing
+are migrated in issues #2 and #4. `scanbox.output` now owns backend-neutral
+smart format selection, naming, host-side assembly, and staged-page cleanup.
 
 ## WSD through sane-airscan
 
@@ -23,9 +24,9 @@ eSCL.
 `inspect()` maps SANE's Flatbed, ADF, ADF Duplex, Color, Gray, and resolution
 options into shared capabilities. `prepare()` validates the normalized request
 without moving paper. `ScanJob.scan()` is the sole acquisition boundary and
-returns PNG pages staged in a host temporary directory. The future output
-assembler owns those staged pages and must remove their directory after it has
-saved the requested PDF or image output.
+returns PNG pages staged in a host temporary directory. The output assembler
+owns those staged pages and removes them after saving the requested PDF or image
+output.
 
 Automatic source selection tries a compatible feeder first. It falls back to
 the flatbed only after an explicit empty-feeder response. An ambiguous error,

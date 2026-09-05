@@ -4,15 +4,17 @@ The guest speaks a small line protocol on stdout. Three kinds of line are for
 the user and are consumed as they arrive -- PROGRESS (a percentage from
 scanimage), PHASE (what it moved on to) and NOTE (a passing condition worth
 saying out loud). Everything else is the machine-readable summary, read once
-the scan is over: PAGE, SOURCE, PAGES, OUT and TRUNCATED.
+the scan is over: PAGE, SOURCE, PAGES, RASTER and TRUNCATED.
 """
 import os
 import shlex
+import shutil
 import tempfile
 import time
 from typing import Dict, List, Optional, Tuple
 
-from . import config, discover, lock, paths, proc, ui, vm
+from . import config, discover, lock, output, paths, proc, ui, vm
+from .contracts import ScanPage, ScanResult, ScanSource
 
 # Bytes/sec, measured off an M276nw over vzNAT.
 LOSSLESS_RATE = 550000
@@ -276,8 +278,6 @@ def run(opts: Options) -> List[str]:
         clear_stale_scan()
         uri = device_uri(ip)
         name = opts.name or time.strftime("scan-%Y%m%d%H%M%S")
-        os.makedirs(opts.out_dir, exist_ok=True)
-
         msg = "scanning"
         if opts.lossless:
             est_mb, est_secs = lossless_estimate(opts.dpi, opts.mode, opts.page)
@@ -293,7 +293,8 @@ def run(opts: Options) -> List[str]:
             with RemoteScan() as remote:
                 args = [uri, opts.source, opts.mode, str(opts.dpi), opts.page,
                         "1" if opts.lossless else "0", name, remote.run_id, opts.fmt,
-                        "1" if opts.image else "0", "1" if opts.split else "0"]
+                        "1" if opts.image else "0", "1" if opts.split else "0",
+                        "1"]
                 with ui.Spinner(msg) as spinner:
                     reader = ProgressReader(spinner, msg)
                     # Keep the guest's stderr: it carries the reason a scan
@@ -327,26 +328,70 @@ def run(opts: Options) -> List[str]:
             if len(page) >= 3:
                 ui.say("  {}: {} (measured {}in)".format(page[0], page[1], page[2]))
 
-        guest_outs = [p[0] for p in fields.get("OUT", []) if p]
-        if not guest_outs:
-            ui.die("the VM produced no output")
+        guest_rasters = [p[0] for p in fields.get("RASTER", []) if p]
+        if not guest_rasters:
+            ui.die("the VM produced no acquired pages")
         used = fields.get("SOURCE", [[""]])[0]
         pages = fields.get("PAGES", [[""]])[0]
+        if len(used) != 1 or used[0] not in ("ADF", "Flatbed"):
+            ui.die("the VM did not report which source it used")
+        if len(pages) != 1 or not pages[0].isdigit() or int(pages[0]) < 1:
+            ui.die("the VM did not report a valid acquired page count")
+        if int(pages[0]) != len(guest_rasters):
+            ui.die("the VM returned an incomplete set of acquired pages")
 
-        # Split output (and png/jpeg, which are inherently single-image
-        # formats) gives one OUT line per page, so copy however many the guest
-        # produced. It already names them from `name`, so its basename is what
-        # we want on the host too.
-        outs = []
-        with ui.Spinner("saving"):
-            for guest_out in guest_outs:
-                out_path = os.path.join(opts.out_dir, os.path.basename(guest_out))
-                copy = proc.run(
-                    ["limactl", "copy", "{}:{}".format(vm.NAME, guest_out), out_path],
-                    timeout=600)
-                if not copy.ok:
-                    ui.die("could not copy the scan out of the VM")
-                outs.append(out_path)
+        host_dir = tempfile.mkdtemp(prefix="scanbox-legacy-")
+        acquired = []
+        try:
+            with ui.Spinner("copying acquired pages"):
+                for index, guest_page in enumerate(guest_rasters, 1):
+                    host_page = os.path.join(
+                        host_dir, "page-{:04d}.png".format(index))
+                    copy = proc.run(
+                        ["limactl", "copy",
+                         "{}:{}".format(vm.NAME, guest_page), host_page],
+                        timeout=600)
+                    if not copy.ok:
+                        ui.die("could not copy an acquired page out of the VM")
+                    acquired.append(ScanPage(
+                        index=index,
+                        path=host_page,
+                        media_type="image/png",
+                        resolution=opts.dpi,
+                    ))
+
+            source = (ScanSource.FEEDER
+                      if used and used[0] == "ADF" else ScanSource.FLATBED)
+            result = ScanResult(
+                scanner_id=uri,
+                backend="hplip-legacy",
+                source=source,
+                pages=tuple(acquired),
+                truncated="TRUNCATED" in fields,
+            )
+            output_options = output.OutputOptions(
+                out_dir=opts.out_dir,
+                name=name,
+                fmt=None if opts.fmt == "auto" else opts.fmt,
+                image=opts.image,
+                split=opts.split,
+                lossless=opts.lossless,
+                mode=opts.mode,
+            )
+            with ui.Spinner("saving") as spinner:
+                def on_output_event(kind: str, value: str) -> None:
+                    spinner.msg = value
+                    if kind == "progress" and not spinner.animating:
+                        ui.say("  " + value)
+
+                outs = list(output.assemble(
+                    result, output_options, on_event=on_output_event))
+        except (output.OutputError, ValueError) as error:
+            ui.die(str(error))
+        finally:
+            # The assembler removes successfully constructed ScanPage files;
+            # this also covers a copy failure before a result can be built.
+            shutil.rmtree(host_dir, ignore_errors=True)
 
     vm.idle_timer_arm(opts.keep_alive)
 

@@ -1,11 +1,11 @@
 #!/bin/bash
-# Runs INSIDE the VM. Scans, sizes the pages, assembles output, and prints a small
-# machine-readable summary the host parses.
+# Runs INSIDE the VM. Scans and sizes pages, then either exposes raw rasters to
+# the Python host or follows the older guest-side output compatibility path.
 #
-#   guest-scan.sh <uri> <auto|ADF|Flatbed> <mode> <dpi> <page> <lossless 0|1> <name> [runid] [format] [image 0|1] [split 0|1]
+#   guest-scan.sh <uri> <source> <mode> <dpi> <page> <lossless> <name>
+#                 [runid] [format] [image] [split] [raster-only]
 #
-# Output lines: "PAGE <n> <size> <measured_in>", "SOURCE <x>", "PAGES <n>", "OUT <path>" (one
-# or more, in page order)
+# Output lines include PAGE, SOURCE, PAGES, and either RASTER or OUT paths.
 set -euo pipefail
 
 URI="$1"; SOURCE="$2"; MODE="$3"; DPI="$4"; PAGE="$5"; LOSSLESS="$6"; NAME="$7"
@@ -13,9 +13,10 @@ RUNID="${8:-}"
 FORMAT="${9:-pdf}"
 IMAGE="${10:-0}"
 SPLIT="${11:-0}"
+RASTER_ONLY="${12:-0}"
 
 AUTOFIT=/usr/local/lib/scanbox/autofit.sh
-OUTDIR=/tmp/scanbox-out
+OUTDIR="${SCANBOX_GUEST_OUTDIR:-/tmp/scanbox-out}"
 
 # The host cannot signal us. `limactl shell` rides lima's shared SSH
 # ControlMaster, which outlives the client that borrowed it, and the session gets
@@ -208,6 +209,25 @@ if [ "$used" = "ADF" ] && [ "$PAGE" = "auto" ]; then
     bash "$AUTOFIT" crop "$f" "$2"
     echo "PAGE $(basename "$f" .png) $1 $3"
   done
+fi
+
+# The Python host now owns output policy and assembly. Keep the old guest-side
+# assembly below as a compatibility path for callers that do not request raw
+# rasters yet. Moving these files out of $tmp makes them survive this script's
+# cleanup trap long enough for the host to copy them out of the VM.
+if [ "$RASTER_ONLY" = "1" ]; then
+  i=0
+  rasters=()
+  for f in "$tmp"/p*.png; do
+    i=$((i + 1))
+    dst="$OUTDIR/$(printf 'p%04d.png' "$i")"
+    mv "$f" "$dst"
+    rasters+=("$dst")
+  done
+  echo "SOURCE $used"
+  echo "PAGES $n"
+  for raster in "${rasters[@]}"; do echo "RASTER $raster"; done
+  exit 0
 fi
 
 # --image describes intent rather than a particular container. Resolve it only
