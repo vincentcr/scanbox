@@ -125,13 +125,15 @@ def show_cursor() -> None:
 
 
 def tty_readable() -> bool:
-    """Whether we can prompt.
+    """Whether we can read and write a prompt on the controlling terminal.
 
     /dev/tty passes a readability check on permissions even with no controlling
-    terminal, so actually opening it is the only reliable test.
+    terminal, so actually opening it is the only reliable test. Use the same
+    read/write mode as ask(): a sandbox can permit reading the device while
+    refusing the write needed to display a prompt.
     """
     try:
-        with open("/dev/tty"):
+        with open("/dev/tty", "r+"):
             return True
     except OSError:
         return False

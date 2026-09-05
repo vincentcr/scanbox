@@ -87,23 +87,27 @@ scanbox stop                   # stop the VM now
 Running `scanbox` with no arguments prints help. Scanning moves paper, so it needs
 the explicit `scan` verb rather than being the default action.
 
-PDFs land in `~/Pictures/Scans/scan-YYYYMMDDHHMMSS.pdf`.
+Scans land in `~/Pictures/Scans`, named `scan-YYYYMMDDHHMMSS` followed by the
+chosen extension (and a page number when a scan is split).
 
 | option | |
 |---|---|
 | `--out DIR` | where scans land (default `~/Pictures/Scans`) |
 | `--name NAME` | base filename |
-| `--dpi N` | 75–1200, default 300 |
+| `--dpi N` | 75–1200, default 300 for PDF or 600 with `--image` |
 | `--mode M` | `Color`\|`Gray`\|`Lineart` |
 | `--page P` | `auto`\|`letter`\|`legal`\|`a4`\|`max` |
-| `--format F` | `pdf`\|`png`\|`tiff`\|`jpeg` (default `pdf`) |
+| `--image` | save image output instead of PDF; the format is chosen automatically |
+| `--split` | save one output file per page instead of joining the pages |
+| `--format F` | explicitly choose `pdf`\|`png`\|`tiff`\|`jpeg`; cannot be combined with `--image` |
 | `--lossless` | disable the scanner's in-transit JPEG compression (slow — see below) |
 | `--keep-alive MIN` | idle minutes before the VM stops (default 60) |
 | `--printer HOST` | override the configured scanner for one run |
 
-A feeder run collates into one PDF, with **each sheet sized from its own trailing
-edge** — feed two letter pages and a legal one and you get a PDF with two letter pages
-and a legal page. Every page is kept, blanks included.
+A feeder run normally collates into one PDF. `--split` writes one PDF per page
+instead. In either case, **each sheet is sized from its own trailing edge** — feed
+two letter pages and a legal one and you get pages with the corresponding sizes.
+Every page is kept, blanks included.
 
 Config lives at `~/.config/scanbox/config` (see `config.example`) and is not committed.
 
@@ -173,16 +177,26 @@ loaded.)
 before the data ever reaches us — the only lossy step, which no output format
 recovers. Use `--lossless` when it matters.
 
-`--format` picks what lands on disk: `pdf` (the default, lossless, and stays that
-way regardless of this option) collates everything into one file, which is what you
-want for a multi-page document you'll read or print as a whole. `--format tiff` is
-also lossless and multi-page, and is the better pick for long-term archival, since
-some tools trust TIFF over PDF for that. `--format png` skips PDF assembly entirely
-and just saves the scanned pages as-is — it's the fastest path, and the only one
-that's lossless end-to-end with zero re-encoding, which makes it the right choice
-for a single photo. `--format jpeg` is there for when small size matters more than
-fidelity; combining it with `--lossless` is self-defeating (a warning says so) since
-you'd be paying for an uncompressed transfer only to re-compress it on disk anyway.
+The default output is a PDF, joined into one file unless `--split` asks for one PDF
+per page. `--image` instead chooses an image format from the job itself:
+
+- a joined feeder scan becomes a multi-page TIFF;
+- a flatbed or split lossless scan becomes PNG;
+- a flatbed or split Lineart scan also becomes PNG, because JPEG is a poor fit
+  for hard one-bit edges;
+- every other flatbed or split scan becomes JPEG.
+
+With the default `auto` source, this is based on the source actually used: the same
+command produces TIFF when paper is in the feeder and JPEG or PNG when it falls back
+to the bed. `--image` defaults to 600 dpi and Color; `--dpi` and `--mode` always
+override those defaults.
+
+`--format` remains available when the exact format matters. PDF and TIFF join pages
+unless `--split` is present. PNG and JPEG are inherently one file per page. PNG
+skips assembly and saves the scanned pages as-is, so it is the only path with no
+output re-encoding. Combining explicit `--format jpeg` with `--lossless` is
+self-defeating (a warning says so): it pays for an uncompressed transfer only to
+re-compress the result on disk.
 
 It is not free. Without the in-transit JPEG the whole raster crosses the network
 uncompressed, and this printer's SOAP transfer measures about **550 KB/s**:

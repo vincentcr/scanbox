@@ -28,10 +28,12 @@ Options (for setup)
 Options (for scan)
   --out DIR         where scans land       (default ~/Pictures/Scans)
   --name NAME       base filename          (default scan-YYYYMMDDHHMMSS)
-  --dpi N           resolution             (default 300; 75..1200)
+  --dpi N           resolution             (default 300; --image: 600; 75..1200)
   --mode M          Color|Gray|Lineart     (default Color)
   --page P          auto|letter|legal|a4|max  (default auto)
-  --format F        pdf|png|tiff|jpeg      (default pdf)
+  --image           save images, choosing TIFF/PNG/JPEG automatically
+  --split           save one output file per page
+  --format F        choose the exact pdf|png|tiff|jpeg format
   --lossless        disable the scanner's in-transit JPEG compression
   --keep-alive MIN  idle minutes before the VM stops (default 60)
   --printer HOST    override the configured scanner for this run"""
@@ -81,12 +83,17 @@ def build_parser() -> _Parser:
     # M276nw does, but this is meant to work on other pre-eSCL HP MFPs too, and
     # refusing a resolution some other model supports would be a guess. The
     # scanner's own error is the authority.
-    p.add_argument("--dpi", type=int, default=300)
+    # Keep omission distinct from an explicit 300: image output gets a higher
+    # default, but an explicit --dpi always wins.
+    p.add_argument("--dpi", type=int)
     p.add_argument("--mode", default="Color", choices=["Color", "Gray", "Lineart"])
     p.add_argument("--page", default="auto",
                    choices=["auto", "letter", "legal", "a4", "max"])
-    p.add_argument("--format", dest="fmt", default="pdf",
-                   choices=["pdf", "png", "tiff", "jpeg"])
+    output = p.add_mutually_exclusive_group()
+    output.add_argument("--image", action="store_true")
+    output.add_argument("--format", dest="fmt",
+                        choices=["pdf", "png", "tiff", "jpeg"])
+    p.add_argument("--split", action="store_true")
     p.add_argument("--lossless", action="store_true")
     p.add_argument("--keep-alive", dest="keep_alive", type=int, default=60)
     p.add_argument("--printer")
@@ -111,9 +118,11 @@ def cmd_scan(args: argparse.Namespace) -> int:
     if args.lossless and args.fmt == "jpeg":
         ui.warn("--lossless with --format jpeg pays for an uncompressed transfer "
                 "and then re-compresses it on disk anyway. Proceeding.")
+    dpi = args.dpi if args.dpi is not None else (600 if args.image else 300)
     opts = scan.Options(
-        source=SOURCES[args.source], mode=args.mode, dpi=args.dpi, page=args.page,
+        source=SOURCES[args.source], mode=args.mode, dpi=dpi, page=args.page,
         lossless=args.lossless, name=args.name, fmt=args.fmt,
+        image=args.image, split=args.split,
         out_dir=args.out_dir, keep_alive=args.keep_alive, printer=args.printer,
     )
     for path in scan.run(opts):

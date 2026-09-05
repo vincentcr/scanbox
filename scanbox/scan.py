@@ -239,7 +239,8 @@ def parse_summary(lines: List[str]) -> Dict[str, List[List[str]]]:
 class Options:
     def __init__(self, source: str = "auto", mode: str = "Color", dpi: int = 300,
                  page: str = "auto", lossless: bool = False,
-                 name: Optional[str] = None, fmt: str = "pdf",
+                 name: Optional[str] = None, fmt: Optional[str] = None,
+                 image: bool = False, split: bool = False,
                  out_dir: Optional[str] = None, keep_alive: int = 60,
                  printer: Optional[str] = None) -> None:
         self.source = source
@@ -248,7 +249,11 @@ class Options:
         self.page = page
         self.lossless = lossless
         self.name = name
-        self.fmt = fmt
+        # "auto" is resolved in the guest, after source=auto has discovered
+        # whether this is really a feeder batch or a flatbed scan.
+        self.fmt = fmt or ("auto" if image else "pdf")
+        self.image = image
+        self.split = split
         self.out_dir = out_dir or paths.DEFAULT_OUT_DIR
         self.keep_alive = keep_alive
         self.printer = printer
@@ -287,7 +292,8 @@ def run(opts: Options) -> List[str]:
         try:
             with RemoteScan() as remote:
                 args = [uri, opts.source, opts.mode, str(opts.dpi), opts.page,
-                        "1" if opts.lossless else "0", name, remote.run_id, opts.fmt]
+                        "1" if opts.lossless else "0", name, remote.run_id, opts.fmt,
+                        "1" if opts.image else "0", "1" if opts.split else "0"]
                 with ui.Spinner(msg) as spinner:
                     reader = ProgressReader(spinner, msg)
                     # Keep the guest's stderr: it carries the reason a scan
@@ -327,9 +333,10 @@ def run(opts: Options) -> List[str]:
         used = fields.get("SOURCE", [[""]])[0]
         pages = fields.get("PAGES", [[""]])[0]
 
-        # png/jpeg give one OUT line per page rather than one for the whole
-        # scan, so copy however many the guest produced. It already names them
-        # from `name`, so its basename is what we want on the host too.
+        # Split output (and png/jpeg, which are inherently single-image
+        # formats) gives one OUT line per page, so copy however many the guest
+        # produced. It already names them from `name`, so its basename is what
+        # we want on the host too.
         outs = []
         with ui.Spinner("saving"):
             for guest_out in guest_outs:

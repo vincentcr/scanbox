@@ -2,7 +2,7 @@
 # Runs INSIDE the VM. Scans, sizes the pages, assembles output, and prints a small
 # machine-readable summary the host parses.
 #
-#   guest-scan.sh <uri> <auto|ADF|Flatbed> <mode> <dpi> <page> <lossless 0|1> <name> [runid] [format]
+#   guest-scan.sh <uri> <auto|ADF|Flatbed> <mode> <dpi> <page> <lossless 0|1> <name> [runid] [format] [image 0|1] [split 0|1]
 #
 # Output lines: "PAGE <n> <size> <measured_in>", "SOURCE <x>", "PAGES <n>", "OUT <path>" (one
 # or more, in page order)
@@ -11,6 +11,8 @@ set -euo pipefail
 URI="$1"; SOURCE="$2"; MODE="$3"; DPI="$4"; PAGE="$5"; LOSSLESS="$6"; NAME="$7"
 RUNID="${8:-}"
 FORMAT="${9:-pdf}"
+IMAGE="${10:-0}"
+SPLIT="${11:-0}"
 
 AUTOFIT=/usr/local/lib/scanbox/autofit.sh
 OUTDIR=/tmp/scanbox-out
@@ -208,6 +210,21 @@ if [ "$used" = "ADF" ] && [ "$PAGE" = "auto" ]; then
   done
 fi
 
+# --image describes intent rather than a particular container. Resolve it only
+# now, because source=auto does not tell us whether the feeder or flatbed won
+# until after the feeder probe. A joined feeder batch needs the one image format
+# here that supports multiple pages. Lineart stays PNG even when the transfer was
+# compressed: JPEG is a poor final encoding for hard one-bit edges and text.
+if [ "$FORMAT" = "auto" ] && [ "$IMAGE" = "1" ]; then
+  if [ "$used" = "ADF" ] && [ "$SPLIT" = "0" ]; then
+    FORMAT=tiff
+  elif [ "$LOSSLESS" = "1" ] || [ "$MODE" = "Lineart" ]; then
+    FORMAT=png
+  else
+    FORMAT=jpeg
+  fi
+fi
+
 # Every page is kept, blanks included -- predictable beats clever.
 #
 # Assembly can be its own slow step, right after the scanner has already gone
@@ -218,14 +235,40 @@ fi
 outs=()
 case "$FORMAT" in
   pdf)
-    echo "PHASE building the PDF"
-    convert "$tmp"/p*.png -quality 88 "$OUTDIR/$NAME.pdf"
-    outs=("$OUTDIR/$NAME.pdf")
+    if [ "$SPLIT" = "1" ]; then
+      echo "PHASE building the PDF page$([ "$n" -eq 1 ] || echo s)"
+      i=0
+      for f in "$tmp"/p*.png; do
+        i=$((i + 1))
+        if [ "$n" -eq 1 ]; then dst="$OUTDIR/$NAME.pdf"
+        else dst="$OUTDIR/$(printf '%s-p%03d.pdf' "$NAME" "$i")"
+        fi
+        convert "$f" -quality 88 "$dst"
+        outs+=("$dst")
+      done
+    else
+      echo "PHASE building the PDF"
+      convert "$tmp"/p*.png -quality 88 "$OUTDIR/$NAME.pdf"
+      outs=("$OUTDIR/$NAME.pdf")
+    fi
     ;;
   tiff)
-    echo "PHASE building the TIFF"
-    convert "$tmp"/p*.png -compress Zip "$OUTDIR/$NAME.tiff"
-    outs=("$OUTDIR/$NAME.tiff")
+    if [ "$SPLIT" = "1" ]; then
+      echo "PHASE building the TIFF page$([ "$n" -eq 1 ] || echo s)"
+      i=0
+      for f in "$tmp"/p*.png; do
+        i=$((i + 1))
+        if [ "$n" -eq 1 ]; then dst="$OUTDIR/$NAME.tiff"
+        else dst="$OUTDIR/$(printf '%s-p%03d.tiff' "$NAME" "$i")"
+        fi
+        convert "$f" -compress Zip "$dst"
+        outs+=("$dst")
+      done
+    else
+      echo "PHASE building the TIFF"
+      convert "$tmp"/p*.png -compress Zip "$OUTDIR/$NAME.tiff"
+      outs=("$OUTDIR/$NAME.tiff")
+    fi
     ;;
   png)
     echo "PHASE saving the PNG page$([ "$n" -eq 1 ] || echo s)"
@@ -250,6 +293,10 @@ case "$FORMAT" in
       convert "$f" -quality 92 "$dst"
       outs+=("$dst")
     done
+    ;;
+  *)
+    echo "bad format: $FORMAT" >&2
+    exit 2
     ;;
 esac
 
