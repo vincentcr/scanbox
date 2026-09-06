@@ -37,9 +37,10 @@ two deliberately different identifiers:
 - `Scanner.endpoint` is the current HTTP WSD endpoint and is valid only for the
   current discovery result.
 
-The guest is started and provisioned lazily with `sane-airscan` and
-`sane-utils`; this path does not install HPLIP or HP's proprietary plugin. Every
-guest command receives
+The guest is started lazily only after a WSD scanner is selected. Provisioning
+tracks installed capabilities independently: this path requests only the core
+SANE tools and `sane-airscan`, and never installs HPLIP or HP's proprietary
+plugin. Every guest command receives
 `SANE_AIRSCAN_DEVICE=wsd:scanbox-wsd:<host-discovered-endpoint>`. This both
 disables guest discovery and forces WSD, even though sane-airscan also supports
 eSCL.
@@ -60,3 +61,17 @@ must never retry through another backend after this boundary.
 current-network catalog. It runs entirely on the host, without inspecting the
 device or touching the VM. Only after the CLI selects a candidate does
 `prepare()` ensure the WSD guest and inspect capabilities.
+
+## Guest provisioning boundaries
+
+`scanbox.vm` treats the guest runtime and installed software as separate
+concerns. It probes four capabilities from actual guest state rather than
+trusting one global marker: core SANE tools, sane-airscan, HPLIP/hpaio, and the
+HP plugin. Dependencies are additive and idempotent, so a VM created by an
+older scanbox remains usable and receives only a missing component.
+
+WSD requests `core -> wsd`; legacy HP requests
+`core -> hplip -> hp-plugin` and synchronizes its measurement helper. Each
+provisioning failure names the component that failed. Host-side discovery has
+no dependency on any of these capabilities and therefore cannot create or
+start the VM.

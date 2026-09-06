@@ -281,19 +281,11 @@ class WSDScanJobTests(unittest.TestCase):
 
 
 class WSDProvisioningTests(unittest.TestCase):
-    @mock.patch("scanbox.vm.provision_wsd")
-    @mock.patch("scanbox.vm.is_wsd_provisioned", return_value=False)
-    @mock.patch("scanbox.vm.ensure_runtime")
-    def test_wsd_ensure_uses_only_wsd_provisioning(
-        self, ensure_runtime, is_provisioned, provision_wsd
-    ) -> None:
-        with mock.patch("scanbox.vm.provision") as provision_hplip:
+    def test_wsd_backend_requests_only_the_wsd_capability(self) -> None:
+        with mock.patch("scanbox.vm.ensure_capabilities") as ensure:
             vm.ensure_wsd()
 
-        ensure_runtime.assert_called_once_with()
-        is_provisioned.assert_called_once_with()
-        provision_wsd.assert_called_once_with()
-        provision_hplip.assert_not_called()
+        ensure.assert_called_once_with(vm.Capability.WSD)
 
 
 if __name__ == "__main__":

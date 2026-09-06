@@ -152,7 +152,7 @@ class HPLIPBackend(Backend):
 
     def __init__(self, address: str, *,
                  on_event: Optional[EventHandler] = None,
-                 ensure_guest: Callable[[], None] = vm.ensure,
+                 ensure_guest: Callable[[], None] = vm.ensure_hplip,
                  runner: Runner = proc.run,
                  streaming_runner: StreamingRunner = proc.run_streaming) -> None:
         if not isinstance(address, str) or not address.strip():

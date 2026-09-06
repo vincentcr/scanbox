@@ -155,7 +155,7 @@ journal:
 limactl shell scanbox -- sudo journalctl | grep scanimage
 ```
 
-HP's own CDN 403s on the plugin download; `provision/20-plugin.sh` uses the
+HP's own CDN 403s on the plugin download; `provision/30-hp-plugin.sh` uses the
 OpenPrinting mirror. `bb_soapht-arm64.so` exists, so Apple Silicon needs no emulated
 x86 VM.
 

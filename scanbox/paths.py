@@ -23,9 +23,10 @@ DEFAULT_OUT_DIR = os.environ.get("SCANBOX_OUT", os.path.expanduser("~/Pictures/S
 GUEST_SCAN_SH = os.path.join(ROOT, "lib", "guest-scan.sh")
 GUEST_WSD_SCAN_SH = os.path.join(ROOT, "lib", "guest-wsd-scan.sh")
 AUTOFIT_SH = os.path.join(ROOT, "lib", "autofit.sh")
-PROVISION_PACKAGES_SH = os.path.join(ROOT, "provision", "10-packages.sh")
-PROVISION_PLUGIN_SH = os.path.join(ROOT, "provision", "20-plugin.sh")
-PROVISION_AIRSCAN_SH = os.path.join(ROOT, "provision", "30-airscan.sh")
+PROVISION_CORE_SH = os.path.join(ROOT, "provision", "10-core.sh")
+PROVISION_HPLIP_SH = os.path.join(ROOT, "provision", "20-hplip.sh")
+PROVISION_PLUGIN_SH = os.path.join(ROOT, "provision", "30-hp-plugin.sh")
+PROVISION_AIRSCAN_SH = os.path.join(ROOT, "provision", "40-airscan.sh")
 LIMA_CONFIG = os.path.join(ROOT, "scanbox.yaml")
 
 VM_LOG = os.path.join(STATE_DIR, "lima.log")

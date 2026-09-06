@@ -1,10 +1,8 @@
-# Debian VM that gives an HP LaserJet Pro 200 color MFP M276nw its scanner back.
+# Debian VM for acquisition backends unavailable on the macOS host. WSD uses
+# sane-airscan; older HP devices use HPLIP's hpaio backend. The selected backend
+# provisions only its own dependencies after the guest starts.
 #
-# The printer predates eSCL/AirScan, so macOS can no longer talk to it. HPLIP's
-# hpaio backend still speaks HP's proprietary SOAP scan protocol (TCP 8289), so
-# we run that inside Linux.
-#
-# This file defines the VM only. `scanner` creates it on demand; software setup
+# This file defines the VM only. `scanbox` creates it on demand; software setup
 # lives in provision/ and is applied over stdin by scanbox/vm.py.
 
 # Only the image defaults. Deliberately NOT template:_default/mounts -- that base
