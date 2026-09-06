@@ -15,7 +15,7 @@ IMAGE="${10:-0}"
 SPLIT="${11:-0}"
 RASTER_ONLY="${12:-0}"
 
-AUTOFIT=/usr/local/lib/scanbox/autofit.sh
+AUTOFIT="${SCANBOX_AUTOFIT:-/usr/local/lib/scanbox/autofit.sh}"
 OUTDIR="${SCANBOX_GUEST_OUTDIR:-/tmp/scanbox-out}"
 
 # The host cannot signal us. `limactl shell` rides lima's shared SSH

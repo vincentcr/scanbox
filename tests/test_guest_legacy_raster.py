@@ -43,6 +43,31 @@ done
 printf 'complete png raster' > "$output"
 """
 
+FEEDER_SCANIMAGE = """\
+#!/bin/bash
+set -eu
+batch=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --batch=*) batch="${1#--batch=}" ;;
+  esac
+  shift
+done
+printf 'first page' > "${batch%p%04d.png}p0001.png"
+printf 'second page' > "${batch%p%04d.png}p0002.png"
+echo 'scanimage: sane_start: Document feeder out of documents' >&2
+exit 1
+"""
+
+FAKE_AUTOFIT = """\
+#!/bin/bash
+set -eu
+printf '%s %s\\n' "$1" "$(basename "$2")" >> "$SCANBOX_AUTOFIT_LOG"
+if [ "$1" = measure ]; then
+  echo 'letter 3300 11.00'
+fi
+"""
+
 
 class GuestLegacyRasterTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -109,6 +134,41 @@ class GuestLegacyRasterTests(unittest.TestCase):
             self.assertEqual(stream.read(), "3")
         self.assertEqual(result.stdout.count("NOTE the scanner is still busy"), 2)
         self.assertIn("PAGES 1\n", result.stdout)
+
+    def test_auto_sized_feeder_measures_and_crops_every_page(self) -> None:
+        scanimage = os.path.join(self.tools, "scanimage")
+        with open(scanimage, "w") as stream:
+            stream.write(textwrap.dedent(FEEDER_SCANIMAGE))
+        os.chmod(scanimage, 0o755)
+        autofit = os.path.join(self.tools, "autofit")
+        with open(autofit, "w") as stream:
+            stream.write(textwrap.dedent(FAKE_AUTOFIT))
+        os.chmod(autofit, 0o755)
+        log = os.path.join(self.root, "autofit.log")
+        self.env["SCANBOX_AUTOFIT"] = autofit
+        self.env["SCANBOX_AUTOFIT_LOG"] = log
+
+        result = subprocess.run(
+            [
+                "bash", paths.GUEST_SCAN_SH, "hpaio:/net/test", "ADF",
+                "Color", "300", "auto", "0", "name", "", "pdf",
+                "0", "0", "1",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            env=self.env,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("SOURCE ADF\n", result.stdout)
+        self.assertIn("PAGES 2\n", result.stdout)
+        self.assertEqual(result.stdout.count("RASTER "), 2)
+        with open(log) as stream:
+            self.assertEqual(stream.read().splitlines(), [
+                "measure p0001.png", "crop p0001.png",
+                "measure p0002.png", "crop p0002.png",
+            ])
 
 
 if __name__ == "__main__":

@@ -8,8 +8,9 @@ SCANNER_NAME=Office scanner
 # DHCP address changes do not change the configured scanner.
 SCANNER_HOST=office-scanner.local
 
-# auto lets scanbox choose a usable protocol. native, wsd, and legacy are also
-# accepted as explicit preferences for the backend router.
+# auto lets scanbox choose a usable protocol. wsd and legacy force a backend.
+# native is reserved for deferred macOS ImageCapture work and currently reports
+# that it is unavailable.
 SCANNER_PROTOCOL=auto
 
 # A fixed address is supported when the device has no resolvable hostname.

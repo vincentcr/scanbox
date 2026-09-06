@@ -19,7 +19,7 @@ scanbox -- scan from the network MFP
                             bed     force the flatbed
   scanbox setup           find a scanner and save it as your config
   scanbox scanners        list usable scanners on the current network
-  scanbox status          VM state, config, resolved printer
+  scanbox status          VM state, config, resolved scanner
   scanbox stop            stop the VM now
 
 Options (for setup)
