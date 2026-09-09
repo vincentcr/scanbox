@@ -24,6 +24,7 @@ scanbox -- scan from the network MFP
 
 Options (for setup)
   --host=NAME       skip discovery and use this scanner
+  --backend B       save auto|wsd|hplip|imagecapture as its backend
   --overwrite       replace an existing config without asking
 
 Options (for scan)
@@ -39,8 +40,8 @@ Options (for scan)
   --keep-alive MIN  idle minutes before the VM stops (default 60)
   --scanner NAME    use a current-network scanner by name or stable ID;
                     use auto to select or prompt without changing config
-  --protocol P      override auto|wsd|legacy|native for this run
-  --printer HOST    legacy: override the configured HP host for this run"""
+  --backend B       override auto|wsd|hplip|imagecapture for this run
+  --printer HOST    HPLIP: override the configured HP host for this run"""
 
 # What the user types, and what SANE calls it.
 SOURCES = {"auto": "auto", "feeder": "ADF", "bed": "Flatbed", "flatbed": "Flatbed"}
@@ -103,11 +104,12 @@ def build_parser() -> _Parser:
     target = p.add_mutually_exclusive_group()
     target.add_argument("--scanner")
     target.add_argument("--printer")
-    p.add_argument("--protocol", choices=config.PROTOCOLS)
+    p.add_argument("--backend", choices=config.BACKENDS)
 
     p = sub.add_parser("setup", add_help=False)
     _add_help(p)
     p.add_argument("--host")
+    p.add_argument("--backend", choices=config.BACKENDS)
     p.add_argument("--overwrite", action="store_true")
 
     _add_help(sub.add_parser("status", add_help=False))
@@ -126,15 +128,15 @@ def cmd_scan(args: argparse.Namespace) -> int:
     if args.lossless and args.fmt == "jpeg":
         ui.warn("--lossless with --format jpeg pays for an uncompressed transfer "
                 "and then re-compresses it on disk anyway. Proceeding.")
-    if args.printer and args.protocol not in (None, "legacy"):
-        ui.die("--printer is the explicit legacy path; use --protocol legacy or omit it")
+    if args.printer and args.backend not in (None, "hplip"):
+        ui.die("--printer uses HPLIP; use --backend hplip or omit it")
     dpi = args.dpi if args.dpi is not None else (600 if args.image else 300)
     opts = scan.Options(
         source=SOURCES[args.source], mode=args.mode, dpi=dpi, page=args.page,
         lossless=args.lossless, name=args.name, fmt=args.fmt,
         image=args.image, split=args.split,
         out_dir=args.out_dir, keep_alive=args.keep_alive, printer=args.printer,
-        scanner=args.scanner, protocol=args.protocol,
+        scanner=args.scanner, backend=args.backend,
     )
     for path in scan.run(opts):
         print(path)
@@ -204,15 +206,19 @@ def cmd_setup(args: argparse.Namespace) -> int:
             id=chosen.stable_id,
             name=chosen.model,
             host=host,
-            protocol="auto",
+            backend=args.backend or "hplip",
         )
         ui.say("")
 
     if configured is None:
         if discover.is_ipv4(host):
-            configured = config.ConfiguredScanner(address=host, protocol="auto")
+            configured = config.ConfiguredScanner(
+                address=host, backend=args.backend or "auto"
+            )
         else:
-            configured = config.ConfiguredScanner(host=host, protocol="auto")
+            configured = config.ConfiguredScanner(
+                host=host, backend=args.backend or "auto"
+            )
 
     # Confirm it is actually reachable, but do not refuse to save if it is not
     # -- setting this up while away from the printer's network is legitimate.
@@ -243,13 +249,13 @@ def cmd_status(args: argparse.Namespace) -> int:
             configured.label if configured is not None else "unset"))
         if configured is not None:
             print("identity    {}".format(configured.id or "<not advertised>"))
-            print("protocol    {}".format(configured.protocol))
+            print("backend     {}".format(configured.backend))
             print("locator     {}".format(
                 configured.locator or "<discover by identity>"))
         # Not being able to resolve is a normal thing for status to report, not
         # a reason to abort before printing the rest.
         try:
-            ip = scan.resolve_printer()
+            ip = scan.resolve_configured_address()
         except ui.ScanboxError:
             ip = None
         print("address     {}".format(

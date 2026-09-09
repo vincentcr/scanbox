@@ -35,7 +35,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.load_scanner(), expected)
         values = config.load()
         self.assertEqual(values["SCANNER_ID"], expected.id)
-        self.assertEqual(values["SCANNER_PROTOCOL"], "auto")
+        self.assertEqual(values["SCANNER_BACKEND"], "auto")
         self.assertNotIn("PRINTER_HOST", values)
 
     def test_legacy_host_and_ip_are_accepted_and_migrated_atomically(self):
@@ -48,7 +48,7 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(scanner.host, "home-scanner.local")
         self.assertEqual(scanner.address, "192.0.2.20")
-        self.assertEqual(scanner.protocol, "auto")
+        self.assertEqual(scanner.backend, "auto")
         values = config.load()
         self.assertEqual(values["SCANNER_HOST"], "home-scanner.local")
         self.assertEqual(values["SCANNER_ADDRESS"], "192.0.2.20")
@@ -82,14 +82,14 @@ class ConfigTests(unittest.TestCase):
         with mock.patch.object(
                 scan.discover, "resolve_ipv4",
                 side_effect=("192.0.2.20", "192.0.2.21")) as resolve:
-            self.assertEqual(scan.resolve_printer(), "192.0.2.20")
-            self.assertEqual(scan.resolve_printer(), "192.0.2.21")
+            self.assertEqual(scan.resolve_configured_address(), "192.0.2.20")
+            self.assertEqual(scan.resolve_configured_address(), "192.0.2.21")
 
         self.assertEqual(resolve.call_count, 2)
 
-    def test_protocol_is_validated(self):
-        with self.assertRaisesRegex(ValueError, "unknown scanner protocol"):
-            config.ConfiguredScanner(host="scanner.local", protocol="cups")
+    def test_backend_is_validated(self):
+        with self.assertRaisesRegex(ValueError, "unknown scanner backend"):
+            config.ConfiguredScanner(host="scanner.local", backend="cups")
 
 
 if __name__ == "__main__":

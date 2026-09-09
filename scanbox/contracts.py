@@ -13,8 +13,8 @@ Lifecycle invariants matter because scanning moves physical paper:
 * ``ScanJob.result`` is side-effect-free and remains ``None`` until a complete
   result is available.
 
-The legacy HPLIP command now enters acquisition through these contracts; native
-and WSD routing will use the same vocabulary as they are wired into the CLI.
+The HPLIP command enters acquisition through these contracts; ImageCapture and
+WSD routing use the same vocabulary as they are wired into the CLI.
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -489,7 +489,7 @@ class ScanJob(ABC):
 
 
 class Backend(ABC):
-    """Discovery, inspection, and preparation implemented by one protocol."""
+    """Discovery, inspection, and preparation implemented by one backend."""
 
     @property
     @abstractmethod

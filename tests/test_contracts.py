@@ -247,7 +247,7 @@ class ResultTests(unittest.TestCase):
         )
         result = ScanResult(
             scanner_id="scanner-1",
-            backend="sane-airscan-wsd",
+            backend="wsd",
             source="ADF",
             pages=(page,),
             warnings=("feeder stopped early",),

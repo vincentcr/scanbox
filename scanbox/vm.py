@@ -175,7 +175,7 @@ def sync_lib() -> None:
         shell_cmd("sudo", "install", "-d", GUEST_LIB), timeout=30
     ).ok:
         ui.die(
-            "guest provisioning failed for the legacy scan helper "
+            "guest provisioning failed for the HPLIP scan helper "
             "(component: hplip-helper)"
         )
     with open(paths.AUTOFIT_SH) as f:
@@ -189,7 +189,7 @@ def sync_lib() -> None:
     )
     if not installed.ok or not executable.ok:
         ui.die(
-            "guest provisioning failed for the legacy scan helper "
+            "guest provisioning failed for the HPLIP scan helper "
             "(component: hplip-helper)"
         )
 
@@ -276,7 +276,7 @@ def ensure_runtime() -> None:
                 ui.die("could not start the VM")
 
 def ensure_hplip() -> None:
-    """Ensure legacy HPLIP support, including its proprietary plugin."""
+    """Ensure HPLIP support, including its proprietary plugin."""
     ensure_capabilities(Capability.HP_PLUGIN)
     sync_lib()
 

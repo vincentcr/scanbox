@@ -39,7 +39,7 @@ from ..contracts import (
     UnsupportedRequest,
 )
 
-BACKEND_NAME = "sane-airscan-wsd"
+BACKEND_NAME = "wsd"
 MULTICAST_ADDRESS = ("239.255.255.250", 3702)
 DISCOVERY_ACTION = "http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe"
 DISCOVERY_TO = "urn:schemas-xmlsoap-org:ws:2005:04:discovery"

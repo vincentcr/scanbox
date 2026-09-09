@@ -13,7 +13,7 @@ class ScanTargetArgumentTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[0].scanner, "auto")
         self.assertIsNone(run.call_args.args[0].printer)
 
-    def test_legacy_printer_override_remains_available(self):
+    def test_hplip_printer_override_remains_available(self):
         with mock.patch.object(cli.scan, "run", return_value=[]) as run:
             self.assertEqual(
                 cli.main(["scan", "--printer", "old-hp.local"]), 0
@@ -30,23 +30,27 @@ class ScanTargetArgumentTests(unittest.TestCase):
     def test_scanners_command_is_registered(self):
         self.assertEqual(cli.build_parser().parse_args(["scanners"]).cmd, "scanners")
 
-    def test_protocol_override_is_passed_to_scan_options(self):
+    def test_backend_override_is_passed_to_scan_options(self):
         with mock.patch.object(cli.scan, "run", return_value=[]) as run:
-            self.assertEqual(cli.main(["scan", "--protocol", "wsd"]), 0)
-        self.assertEqual(run.call_args.args[0].protocol, "wsd")
+            self.assertEqual(cli.main(["scan", "--backend", "wsd"]), 0)
+        self.assertEqual(run.call_args.args[0].backend, "wsd")
 
-    def test_printer_rejects_a_nonlegacy_protocol(self):
+    def test_printer_rejects_a_non_hplip_backend(self):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(cli.main([
-                "scan", "--printer", "old-hp.local", "--protocol", "wsd"
+                "scan", "--printer", "old-hp.local", "--backend", "wsd"
             ]), 1)
+
+    def test_removed_protocol_option_is_rejected(self):
+        with self.assertRaises(ui.ScanboxError):
+            cli.build_parser().parse_args(["scan", "--protocol", "legacy"])
 
 
 class SetupIdentityTests(unittest.TestCase):
-    def test_discovered_stable_identity_and_hostname_are_saved(self):
+    def test_bonjour_discovery_saves_hplip_backend(self):
         found = cli.discover.Instance(
-            "Xerox instance", "xerox.local", {
-                "ty": "Xerox WorkCentre 6605DN",
+            "HP instance", "hp.local", {
+                "ty": "HP LaserJet 200 color MFP M276nw",
                 "UUID": "5DE90400-1DD2-11B2-84BC-9C934E010299",
             },
         )
@@ -54,7 +58,7 @@ class SetupIdentityTests(unittest.TestCase):
                 mock.patch.object(cli.config, "exists", return_value=False), \
                 mock.patch.object(cli.discover, "instances", return_value=[found.name]), \
                 mock.patch.object(cli.discover, "resolve_instance", return_value=found), \
-                mock.patch.object(cli.discover, "resolve_ipv4", return_value="192.0.2.52"), \
+                mock.patch.object(cli.discover, "resolve_ipv4", return_value="192.0.2.20"), \
                 mock.patch.object(cli.ui, "tty_readable", return_value=True), \
                 mock.patch.object(cli.ui, "ask", return_value=""), \
                 mock.patch.object(cli.config, "save") as save:
@@ -64,9 +68,22 @@ class SetupIdentityTests(unittest.TestCase):
         self.assertEqual(
             configured.id, "uuid:5de90400-1dd2-11b2-84bc-9c934e010299"
         )
-        self.assertEqual(configured.name, "Xerox WorkCentre 6605DN")
+        self.assertEqual(configured.name, "HP LaserJet 200 color MFP M276nw")
+        self.assertEqual(configured.host, "hp.local")
+        self.assertEqual(configured.backend, "hplip")
+
+    def test_host_setup_can_save_an_explicit_backend(self):
+        with contextlib.redirect_stderr(io.StringIO()), \
+                mock.patch.object(cli.config, "exists", return_value=False), \
+                mock.patch.object(cli.discover, "resolve_ipv4", return_value="192.0.2.52"), \
+                mock.patch.object(cli.config, "save") as save:
+            self.assertEqual(cli.main([
+                "setup", "--host", "xerox.local", "--backend", "wsd"
+            ]), 0)
+
+        configured = save.call_args.args[0]
         self.assertEqual(configured.host, "xerox.local")
-        self.assertEqual(configured.protocol, "auto")
+        self.assertEqual(configured.backend, "wsd")
 
 
 if __name__ == "__main__":

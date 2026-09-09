@@ -79,12 +79,12 @@ class FakeBackend(Backend):
 
 def wsd_scanner(identifier="wsd:urn:uuid:5de90400-1dd2-11b2-84bc-9c934e010299",
                 name="Office scanner", endpoint="192.0.2.52"):
-    return Scanner(identifier, name, "sane-airscan-wsd", endpoint)
+    return Scanner(identifier, name, "wsd", endpoint)
 
 
 def legacy_scanner():
     return Scanner(
-        "hpaio:/net/HP_Test?ip=192.0.2.20", "HP Test", "hplip-legacy",
+        "hpaio:/net/HP_Test?ip=192.0.2.20", "HP Test", "hplip",
         "hpaio:/net/HP_Test?ip=192.0.2.20", manufacturer="HP",
     )
 
@@ -105,7 +105,7 @@ class IdentityTests(unittest.TestCase):
             "uuid:5de90400-1dd2-11b2-84bc-9c934e010299",
         )
         self.assertEqual({item.backend for item in groups[0].scanners}, {
-            "imagecapture", "sane-airscan-wsd"
+            "imagecapture", "wsd"
         })
 
     def test_names_and_addresses_do_not_merge_without_a_strong_identity(self):
@@ -120,27 +120,27 @@ class RouterTests(unittest.TestCase):
             "configured", source=ScanSource.FLATBED,
             mode=ScanMode.COLOR, resolution=300,
         )
-        self.legacy_instances = []
+        self.hplip_instances = []
 
-    def legacy_factory(self, address, on_event=None):
-        backend = FakeBackend("hplip-legacy", (legacy_scanner(),))
+    def hplip_factory(self, address, on_event=None):
+        backend = FakeBackend("hplip", (legacy_scanner(),))
         backend.address = address
         backend.on_event = on_event
-        self.legacy_instances.append(backend)
+        self.hplip_instances.append(backend)
         return backend
 
     def router(self, wsd, *, resolver=lambda _host: "192.0.2.20",
-               legacy_support=lambda _configured: True):
+               hplip_support=lambda _configured: True):
         return routing.Router(
             wsd_backend=wsd,
-            legacy_factory=self.legacy_factory,
-            legacy_support=legacy_support,
+            hplip_factory=self.hplip_factory,
+            hplip_support=hplip_support,
             resolver=resolver,
         )
 
     def test_auto_prefers_wsd_by_stable_identity_without_resolving_locator(self):
         scanner = wsd_scanner(endpoint="not-a-locator")
-        wsd = FakeBackend("sane-airscan-wsd", (scanner,))
+        wsd = FakeBackend("wsd", (scanner,))
         resolutions = []
         configured = config.ConfiguredScanner(
             id="uuid:5de90400-1dd2-11b2-84bc-9c934e010299",
@@ -151,10 +151,10 @@ class RouterTests(unittest.TestCase):
             wsd, resolver=lambda host: resolutions.append(host)
         ).prepare(configured, self.request)
 
-        self.assertEqual(route.protocol, "wsd")
+        self.assertEqual(route.backend_name, "wsd")
         self.assertIs(route.scanner, scanner)
         self.assertEqual(resolutions, [])
-        self.assertEqual(self.legacy_instances, [])
+        self.assertEqual(self.hplip_instances, [])
         self.assertEqual(wsd.prepared_request.scanner_id, scanner.id)
         self.assertIn("stable identity", route.diagnostics[-1])
 
@@ -167,7 +167,7 @@ class RouterTests(unittest.TestCase):
             "wsd:urn:uuid:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
             endpoint="192.0.2.99",
         )
-        wsd = FakeBackend("sane-airscan-wsd", (wrong_locator, matching_locator))
+        wsd = FakeBackend("wsd", (wrong_locator, matching_locator))
         configured = config.ConfiguredScanner(
             id="uuid:cccccccc-cccc-cccc-cccc-cccccccccccc",
             name="HP Office scanner", host="office.local",
@@ -180,30 +180,30 @@ class RouterTests(unittest.TestCase):
         self.assertIs(route.scanner, matching_locator)
         self.assertIn("fallback locator", route.diagnostics[-1])
 
-    def test_auto_falls_back_to_legacy_when_wsd_is_absent(self):
-        wsd = FakeBackend("sane-airscan-wsd")
+    def test_auto_falls_back_to_hplip_when_wsd_is_absent(self):
+        wsd = FakeBackend("wsd")
         configured = config.ConfiguredScanner(
             name="HP LaserJet", address="192.0.2.20"
         )
 
         route = self.router(wsd).prepare(configured, self.request)
 
-        self.assertEqual(route.protocol, "legacy")
-        self.assertEqual(len(self.legacy_instances), 1)
-        legacy = self.legacy_instances[0]
-        self.assertEqual(legacy.address, "192.0.2.20")
-        self.assertEqual(legacy.inspect_calls, 1)
-        self.assertEqual(legacy.prepare_calls, 1)
-        self.assertTrue(any("rejected protocol wsd" in line
+        self.assertEqual(route.backend_name, "hplip")
+        self.assertEqual(len(self.hplip_instances), 1)
+        selected = self.hplip_instances[0]
+        self.assertEqual(selected.address, "192.0.2.20")
+        self.assertEqual(selected.inspect_calls, 1)
+        self.assertEqual(selected.prepare_calls, 1)
+        self.assertTrue(any("rejected backend wsd" in line
                             for line in route.diagnostics))
 
     def test_auto_falls_back_after_wsd_prepare_failure(self):
         error = BackendError(
             BackendErrorCode.UNAVAILABLE, "capability probe failed",
-            backend="sane-airscan-wsd", retryable=True,
+            backend="wsd", retryable=True,
         )
         wsd = FakeBackend(
-            "sane-airscan-wsd", (wsd_scanner(),), prepare_error=error
+            "wsd", (wsd_scanner(),), prepare_error=error
         )
         configured = config.ConfiguredScanner(
             id="uuid:5de90400-1dd2-11b2-84bc-9c934e010299",
@@ -212,60 +212,60 @@ class RouterTests(unittest.TestCase):
 
         route = self.router(wsd).prepare(configured, self.request)
 
-        self.assertEqual(route.protocol, "legacy")
-        self.assertEqual(len(self.legacy_instances), 1)
+        self.assertEqual(route.backend_name, "hplip")
+        self.assertEqual(len(self.hplip_instances), 1)
 
-    def test_explicit_wsd_failure_never_builds_legacy_backend(self):
-        wsd = FakeBackend("sane-airscan-wsd")
+    def test_explicit_wsd_failure_never_builds_hplip_backend(self):
+        wsd = FakeBackend("wsd")
         configured = config.ConfiguredScanner(
-            name="HP LaserJet", address="192.0.2.20", protocol="wsd"
+            name="HP LaserJet", address="192.0.2.20", backend="wsd"
         )
 
         with self.assertRaisesRegex(routing.RoutingError, "WSD"):
             self.router(wsd).prepare(configured, self.request)
-        self.assertEqual(self.legacy_instances, [])
+        self.assertEqual(self.hplip_instances, [])
 
-    def test_explicit_legacy_does_not_discover_wsd(self):
-        wsd = FakeBackend("sane-airscan-wsd")
+    def test_explicit_hplip_does_not_discover_wsd(self):
+        wsd = FakeBackend("wsd")
         configured = config.ConfiguredScanner(
-            name="HP LaserJet", address="192.0.2.20", protocol="legacy"
+            name="HP LaserJet", address="192.0.2.20", backend="hplip"
         )
 
         route = self.router(wsd).prepare(configured, self.request)
 
-        self.assertEqual(route.protocol, "legacy")
+        self.assertEqual(route.backend_name, "hplip")
         self.assertEqual(wsd.discover_calls, 0)
 
     def test_known_non_hp_wsd_device_does_not_try_hplip(self):
-        wsd = FakeBackend("sane-airscan-wsd")
+        wsd = FakeBackend("wsd")
         configured = config.ConfiguredScanner(
             name="Xerox WorkCentre", address="192.0.2.52"
         )
 
         with self.assertRaisesRegex(routing.RoutingError, "not supported"):
             self.router(
-                wsd, legacy_support=hplip.supports_configured
+                wsd, hplip_support=hplip.supports_configured
             ).prepare(configured, self.request)
-        self.assertEqual(self.legacy_instances, [])
+        self.assertEqual(self.hplip_instances, [])
 
-    def test_native_fails_before_discovery_or_guest_work(self):
-        wsd = FakeBackend("sane-airscan-wsd")
+    def test_imagecapture_fails_before_discovery_or_guest_work(self):
+        wsd = FakeBackend("wsd")
         configured = config.ConfiguredScanner(
-            name="Office scanner", address="192.0.2.20", protocol="native"
+            name="Office scanner", address="192.0.2.20", backend="imagecapture"
         )
 
         with self.assertRaisesRegex(routing.RoutingError, "not available yet"):
             self.router(wsd).prepare(configured, self.request)
         self.assertEqual(wsd.discover_calls, 0)
-        self.assertEqual(self.legacy_instances, [])
+        self.assertEqual(self.hplip_instances, [])
 
     def test_scan_failure_cannot_trigger_cross_protocol_retry(self):
         acquisition_error = BackendError(
             BackendErrorCode.IO, "paper moved, then transport failed",
-            backend="sane-airscan-wsd", retryable=True,
+            backend="wsd", retryable=True,
         )
         job = FakeJob(acquisition_error)
-        wsd = FakeBackend("sane-airscan-wsd", (wsd_scanner(),), job=job)
+        wsd = FakeBackend("wsd", (wsd_scanner(),), job=job)
         configured = config.ConfiguredScanner(
             id="uuid:5de90400-1dd2-11b2-84bc-9c934e010299",
             name="HP OfficeJet", address="192.0.2.20",
@@ -276,7 +276,7 @@ class RouterTests(unittest.TestCase):
             route.job.scan()
 
         self.assertEqual(job.scan_calls, 1)
-        self.assertEqual(self.legacy_instances, [])
+        self.assertEqual(self.hplip_instances, [])
 
 
 class HPLIPEligibilityTests(unittest.TestCase):

@@ -17,7 +17,7 @@ from .contracts import (
     Backend, BackendError, ScanJob, ScanRequest, Scanner, UnsupportedRequest,
 )
 
-PROTOCOLS = config.PROTOCOLS
+BACKENDS = config.BACKENDS
 
 _UUID_SEARCH_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
@@ -26,9 +26,9 @@ _UUID_SEARCH_RE = re.compile(
 )
 
 EventHandler = Callable[[str, str], None]
-LegacyFactory = Callable[..., Backend]
+HPLIPFactory = Callable[..., Backend]
 Resolver = Callable[[str], Optional[str]]
-LegacySupport = Callable[[config.ConfiguredScanner], bool]
+HPLIPSupport = Callable[[config.ConfiguredScanner], bool]
 
 
 class RoutingError(ValueError):
@@ -47,7 +47,7 @@ class PhysicalScanner:
 class PreparedRoute:
     """One selected backend and job, with an audit trail of the decision."""
 
-    protocol: str
+    backend_name: str
     backend: Backend
     scanner: Scanner
     job: ScanJob
@@ -102,17 +102,17 @@ def group_scanners(scanners: Iterable[Scanner]) -> Tuple[PhysicalScanner, ...]:
 
 
 class Router:
-    """Choose and prepare WSD or vendor-owned legacy acquisition."""
+    """Choose and prepare WSD or HPLIP acquisition."""
 
     def __init__(self, *,
                  wsd_backend: Optional[Backend] = None,
-                 legacy_factory: LegacyFactory = HPLIPBackend,
-                 legacy_support: LegacySupport = supports_hplip,
+                 hplip_factory: HPLIPFactory = HPLIPBackend,
+                 hplip_support: HPLIPSupport = supports_hplip,
                  resolver: Resolver = discover.resolve_ipv4,
                  on_event: Optional[EventHandler] = None) -> None:
         self.wsd_backend = wsd_backend or WSDBackend()
-        self.legacy_factory = legacy_factory
-        self.legacy_support = legacy_support
+        self.hplip_factory = hplip_factory
+        self.hplip_support = hplip_support
         self.resolver = resolver
         self.on_event = on_event or (lambda _kind, _value: None)
         # Backends copy their event handler into a prepared job.  The CLI may
@@ -122,22 +122,22 @@ class Router:
 
     def prepare(self, configured: config.ConfiguredScanner,
                 request: ScanRequest, *,
-                preference: Optional[str] = None) -> PreparedRoute:
+                backend_preference: Optional[str] = None) -> PreparedRoute:
         if not isinstance(configured, config.ConfiguredScanner):
             raise ValueError("configured must be a ConfiguredScanner")
         if not isinstance(request, ScanRequest):
             raise ValueError("request must be a ScanRequest")
-        protocol = (preference or configured.protocol).strip().lower()
-        if protocol not in PROTOCOLS:
-            raise RoutingError("unknown scanner protocol: {!r}".format(protocol))
-        if protocol == "native":
+        selected = (backend_preference or configured.backend).strip().lower()
+        if selected not in BACKENDS:
+            raise RoutingError("unknown scanner backend: {!r}".format(selected))
+        if selected == "imagecapture":
             raise RoutingError(
-                "native scanning is not available yet; use auto, wsd, or legacy"
+                "ImageCapture scanning is not available yet; use auto, wsd, or hplip"
             )
 
         diagnostics: List[str] = []
         wsd_error: Optional[BaseException] = None
-        if protocol in ("auto", "wsd"):
+        if selected in ("auto", "wsd"):
             try:
                 scanner, reason = self._wsd_scanner(configured, diagnostics)
                 if scanner is None:
@@ -145,32 +145,30 @@ class Router:
                 prepared_request = replace(request, scanner_id=scanner.id)
                 job = self.wsd_backend.prepare(scanner, prepared_request)
                 diagnostics.append(
-                    "selected protocol wsd with backend {}: {}".format(
-                        self.wsd_backend.name, reason
-                    )
+                    "selected backend wsd: {}".format(reason)
                 )
                 return PreparedRoute(
                     "wsd", self.wsd_backend, scanner, job, tuple(diagnostics)
                 )
             except (BackendError, RoutingError, UnsupportedRequest) as error:
                 wsd_error = error
-                diagnostics.append("rejected protocol wsd before acquisition: {}".format(error))
-                if protocol == "wsd":
+                diagnostics.append("rejected backend wsd before acquisition: {}".format(error))
+                if selected == "wsd":
                     raise RoutingError("; ".join(diagnostics))
 
-        if protocol in ("auto", "legacy"):
-            if not self.legacy_support(configured):
+        if selected in ("auto", "hplip"):
+            if not self.hplip_support(configured):
                 diagnostics.append(
-                    "rejected protocol legacy: the configured device is not supported "
-                    "by the installed legacy backend"
+                    "rejected backend hplip: the configured device is not supported "
+                    "by HPLIP"
                 )
                 raise RoutingError("; ".join(diagnostics))
             try:
                 address = self._address(configured)
-                backend = self.legacy_factory(address, on_event=self.on_event)
+                backend = self.hplip_factory(address, on_event=self.on_event)
                 scanners = tuple(backend.discover())
                 if not scanners:
-                    raise RoutingError("the legacy backend found no scanner")
+                    raise RoutingError("HPLIP found no scanner")
                 scanner = sorted(
                     scanners,
                     key=lambda item: (item.name.casefold(), item.id, item.endpoint),
@@ -179,22 +177,20 @@ class Router:
                 capabilities = backend.inspect(scanner)
                 capabilities.compatible_sources(prepared_request)
                 job = backend.prepare(scanner, prepared_request)
-                reason = "explicit preference" if protocol == "legacy" else (
+                reason = "explicit preference" if selected == "hplip" else (
                     "WSD was unavailable before acquisition"
                 )
                 diagnostics.append(
-                    "selected protocol legacy with backend {}: {}".format(
-                        backend.name, reason
-                    )
+                    "selected backend hplip: {}".format(reason)
                 )
                 return PreparedRoute(
-                    "legacy", backend, scanner, job, tuple(diagnostics)
+                    "hplip", backend, scanner, job, tuple(diagnostics)
                 )
             except (BackendError, RoutingError, UnsupportedRequest) as error:
                 diagnostics.append(
-                    "rejected protocol legacy before acquisition: {}".format(error)
+                    "rejected backend hplip before acquisition: {}".format(error)
                 )
-                if wsd_error is not None or protocol == "legacy":
+                if wsd_error is not None or selected == "hplip":
                     raise RoutingError("; ".join(diagnostics))
                 raise
 
