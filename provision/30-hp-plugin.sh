@@ -1,6 +1,6 @@
 #!/bin/bash
 # Install HP's closed-source scan plugin. This script is reachable only through
-# the legacy hpaio capability and remains idempotent for existing VMs.
+# the HPLIP capability and remains idempotent across repeated provisioning.
 set -euo pipefail
 
 plugin_present() {

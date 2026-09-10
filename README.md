@@ -40,8 +40,8 @@ The quickest check after installation is read-only:
 scanbox scanners
 ```
 
-This lists usable WSD scanners on the current LAN. It does not start the VM or
-move paper.
+This lists WSD scanners and HP scanners advertised for HPLIP on the current
+LAN. It does not start the VM or move paper.
 
 ## Install
 
@@ -69,23 +69,42 @@ timeout.
 
 ## Choose a scanner
 
-For a scanner you use regularly, save it once:
+Discover the current network and save a scanner you use regularly:
 
 ```sh
-scanbox setup
+scanbox scanners
+scanbox scanners --save
 ```
 
-Setup discovers Bonjour-advertised scanners and writes
-`~/.config/scanbox/config`. If discovery does not list a known WSD scanner,
-configure its hostname or fixed address directly:
+Discovery runs WSD and Bonjour/HPLIP searches through the same catalog used by
+temporary scans. `--save` asks which physical scanner to remember, checks its
+available backends without acquiring a page, and stores the backend that
+worked. Repeated saves add or update entries in
+`~/.config/scanbox/scanners.json`; they do not replace scanners from another
+network.
+
+Select by exact displayed name or stable ID, or make the saved scanner the
+preferred tie-breaker:
 
 ```sh
-scanbox setup --host office-scanner.local --backend hplip
-scanbox setup --host 192.168.1.40 --backend wsd
+scanbox scanners --save "Xerox WorkCentre 6605DN"
+scanbox scanners --save "HP LaserJet" --preferred
 ```
 
-Setup asks before replacing an existing configuration. Use `--overwrite` to
-skip that confirmation.
+For a device that does not advertise itself, save an explicit locator and
+backend:
+
+```sh
+scanbox scanners --save "Basement HP" --host hp.local --backend hplip
+```
+
+Inspect and manage the registry without touching the network:
+
+```sh
+scanbox scanners --saved
+scanbox scanners --prefer "Xerox WorkCentre 6605DN"
+scanbox scanners --forget "Basement HP"
+```
 
 To use a scanner on the LAN temporarily, without reading or changing the saved
 configuration:
@@ -95,9 +114,11 @@ scanbox scanners
 scanbox scan --scanner auto
 ```
 
-With one match, `auto` selects it. With several, an interactive terminal asks;
-scripts fail with the candidate list instead of guessing. You can also pass the
-exact displayed name or stable ID to `--scanner`.
+With one physical match, `auto` selects it. With several, an interactive
+terminal asks; scripts fail with the candidate list instead of guessing. Plain
+`scanbox scan` tries the preferred saved scanner first, then the remaining
+saved scanners until one can prepare a scan. This lets home and office scanners
+coexist without tying configuration to an SSID.
 
 ## Scan
 
@@ -164,19 +185,16 @@ accommodation, not a promise made for every WSD scanner.
 
 ## Backend selection
 
-Setup saves Bonjour `_scanner._tcp` discoveries as `hplip`, because that is the
-HP discovery path backed by this project. A manual `--host` setup accepts
-`--backend auto|wsd|hplip|imagecapture`; without it, the backend remains `auto`.
-
-With `auto`, scanbox first looks for the same physical scanner over WSD,
-matching its stable identity before its current hostname or address. For an
-eligible HP device, it can fall back to HPLIP if WSD fails during discovery or
-capability inspection.
+Discovery groups WSD and Bonjour advertisements only when they carry the same
+strong UUID or serial identity. During `scanners --save`, scanbox checks WSD
+first and falls back to HPLIP while acquisition is still read-only. The
+successful concrete backend is stored with that scanner, avoiding repeated
+probing on later scans.
 
 It never switches protocols after acquisition begins: once paper might have
 moved, an error is reported rather than risking a duplicate or incomplete scan.
 
-You can override backend selection for one configured scan:
+You can override backend selection for one scan:
 
 ```sh
 scanbox scan --backend wsd
@@ -201,8 +219,10 @@ If discovery finds nothing:
 
 - confirm the scanner and Mac are on the same LAN, without client isolation;
 - wake the scanner and check that WSD scanning is enabled;
-- try `scanbox setup --host HOST_OR_IP` for a scanner you know;
-- remember that `scanbox scanners` currently lists WSD, not eSCL-only, devices.
+- for an HP scanner that does not advertise itself, try
+  `scanbox scanners --save --host HOST --backend hplip`;
+- use `scanbox scanners --saved` to inspect configuration without discovery;
+- remember that eSCL-only devices are not yet supported.
 
 If VM creation or provisioning fails, the detailed Lima log is
 `~/.local/state/scanbox/lima.log`. `scanbox stop` is safe and the next scan starts
@@ -224,7 +244,7 @@ python3 -m unittest discover -v
 ```
 
 The automated suite covers both backend contracts, routing, discovery,
-selection, configuration migration, output assembly, guest protocols, and lazy
+selection, saved-scanner configuration, output assembly, guest protocols, and lazy
 provisioning. WSD discovery, flatbed scanning, and a complete three-page feeder
 batch have been exercised on the Xerox. The refactored HPLIP path has automated
 regression coverage, but still awaits a repeat physical run against the HP on

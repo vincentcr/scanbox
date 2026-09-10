@@ -5,9 +5,10 @@ import tempfile
 import unittest
 from unittest import mock
 
-from scanbox import paths, proc
+from scanbox import discover, paths, proc
 from scanbox.backends.hplip import (
     BACKEND_NAME,
+    BonjourHPLIPBackend,
     HPLIPBackend,
     HPLIPError,
     hpaio_uri,
@@ -111,6 +112,35 @@ class HPLIPDiscoveryTests(unittest.TestCase):
                 legacy_scanner(),
                 ScanRequest(legacy_scanner().id, source="feeder-duplex"),
             )
+
+    def test_bonjour_discovery_filters_to_hp_without_starting_guest(self):
+        instances = {
+            "HP instance": discover.Instance(
+                "HP instance", "hp.local", {
+                    "ty": "HP LaserJet MFP",
+                    "UUID": "5DE90400-1DD2-11B2-84BC-9C934E010299",
+                },
+            ),
+            "Xerox instance": discover.Instance(
+                "Xerox instance", "xerox.local", {"ty": "Xerox WorkCentre"},
+            ),
+        }
+        factory = mock.Mock(side_effect=AssertionError("guest must stay stopped"))
+        backend = BonjourHPLIPBackend(
+            instance_browser=lambda _seconds: tuple(instances),
+            instance_resolver=instances.__getitem__,
+            backend_factory=factory,
+        )
+
+        scanners = backend.discover()
+
+        self.assertEqual(len(scanners), 1)
+        self.assertEqual(scanners[0].name, "HP LaserJet MFP")
+        self.assertEqual(scanners[0].endpoint, "hp.local")
+        self.assertEqual(
+            scanners[0].id, "uuid:5de90400-1dd2-11b2-84bc-9c934e010299"
+        )
+        factory.assert_not_called()
 
 
 class HPLIPScanJobTests(unittest.TestCase):

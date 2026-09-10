@@ -5,10 +5,10 @@ guest, HPLIP's source/mode spellings, the guest line protocol, stale-session
 cleanup, and remote cancellation.  Callers receive the same normalized PNG
 pages as every other backend.
 
-Discovery here is intentionally configured-address-only.  Constructing this
-backend is an explicit request to use the legacy HP path; it never contributes
-candidates to native or current-network discovery.
+``BonjourHPLIPBackend`` discovers HP candidates on the host and delegates a
+selected device to the address-bound ``HPLIPBackend`` in the guest.
 """
+from dataclasses import replace
 import os
 import re
 import shlex
@@ -18,7 +18,7 @@ import threading
 import time
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from .. import lock, paths, proc, vm
+from .. import discover as host_discovery, lock, paths, proc, vm
 from ..contracts import (
     Backend,
     BackendError,
@@ -40,6 +40,7 @@ BACKEND_NAME = "hplip"
 EventHandler = Callable[[str, str], None]
 Runner = Callable[..., proc.Result]
 StreamingRunner = Callable[..., proc.Result]
+BackendFactory = Callable[..., Backend]
 
 _OPTION_RE = re.compile(r"^\s*(?:-[A-Za-z],\s*)?--([\w-]+)\s+(.+?)\s*$")
 _RANGE_RE = re.compile(r"^(\d+)\.\.(\d+)(?:dpi)?(?:\s+\(in steps of\s+(\d+))?.*$")
@@ -180,6 +181,7 @@ class HPLIPBackend(Backend):
             endpoint=uri,
             manufacturer="HP",
             transport="network-hplip",
+            address=self.address,
         )
         return (self._scanner,)
 
@@ -284,6 +286,110 @@ class HPLIPBackend(Backend):
     def release(self, keep_alive: int) -> None:
         """Keep the HPLIP guest warm for the configured idle period."""
         vm.idle_timer_arm(keep_alive)
+
+
+class BonjourHPLIPBackend(Backend):
+    """Host-side HPLIP discovery with lazy guest validation and acquisition."""
+
+    def __init__(self, *, discovery_seconds: float = 3.0,
+                 on_event: Optional[EventHandler] = None,
+                 instance_browser: Callable[[float], Sequence[str]] = host_discovery.instances,
+                 instance_resolver: Callable[[str], host_discovery.Instance] = host_discovery.resolve_instance,
+                 address_resolver: Callable[[str], Optional[str]] = host_discovery.resolve_ipv4,
+                 backend_factory: BackendFactory = HPLIPBackend) -> None:
+        self.discovery_seconds = discovery_seconds
+        self.on_event = on_event or (lambda _kind, _value: None)
+        self._instance_browser = instance_browser
+        self._instance_resolver = instance_resolver
+        self._address_resolver = address_resolver
+        self._backend_factory = backend_factory
+        self._delegates: Dict[str, Tuple[Backend, Scanner]] = {}
+        self._active_backend: Optional[Backend] = None
+
+    @property
+    def name(self) -> str:
+        return BACKEND_NAME
+
+    def discover(self) -> Sequence[Scanner]:
+        found = []
+        for instance_name in self._instance_browser(self.discovery_seconds):
+            instance = self._instance_resolver(instance_name)
+            if not instance.host:
+                continue
+            candidate = Scanner(
+                id=instance.stable_id or "bonjour:" + instance.name,
+                name=instance.model,
+                backend=self.name,
+                endpoint=instance.host,
+                manufacturer="HP",
+                transport="network-hplip",
+                host=instance.host,
+            )
+            if supports_configured(candidate):
+                found.append(candidate)
+        return tuple(found)
+
+    def matches_locator(self, scanner: Scanner,
+                        locators: Sequence[str]) -> bool:
+        self._check_scanner(scanner)
+        endpoint = scanner.endpoint.rstrip(".").casefold()
+        return endpoint in {
+            value.rstrip(".").casefold() for value in locators if value
+        }
+
+    def _check_scanner(self, scanner: Scanner) -> None:
+        if not isinstance(scanner, Scanner) or scanner.backend != self.name:
+            raise ValueError("scanner does not belong to Bonjour HPLIP discovery")
+
+    def _delegate(self, scanner: Scanner) -> Tuple[Backend, Scanner]:
+        self._check_scanner(scanner)
+        cached = self._delegates.get(scanner.endpoint)
+        if cached is not None:
+            return cached
+        address = (
+            scanner.endpoint if host_discovery.is_ipv4(scanner.endpoint)
+            else self._address_resolver(scanner.endpoint)
+        )
+        if not address:
+            raise HPLIPError(
+                BackendErrorCode.UNAVAILABLE,
+                "could not resolve {}".format(scanner.endpoint),
+                retryable=True,
+            )
+        backend = self._backend_factory(address, on_event=self.on_event)
+        scanners = tuple(backend.discover())
+        if not scanners:
+            raise HPLIPError(
+                BackendErrorCode.UNAVAILABLE,
+                "HPLIP found no scanner at {}".format(address),
+                retryable=True,
+            )
+        delegated = backend, scanners[0]
+        self._delegates[scanner.endpoint] = delegated
+        self._active_backend = backend
+        return delegated
+
+    def inspect(self, scanner: Scanner) -> Capabilities:
+        backend, actual = self._delegate(scanner)
+        capabilities = backend.inspect(actual)
+        return Capabilities(scanner.id, capabilities.sources)
+
+    def prepare(self, scanner: Scanner, request: ScanRequest) -> ScanJob:
+        if not isinstance(request, ScanRequest):
+            raise ValueError("request must be a ScanRequest")
+        if request.scanner_id != scanner.id:
+            raise UnsupportedRequest("request targets a different scanner")
+        backend, actual = self._delegate(scanner)
+        capabilities = backend.inspect(actual)
+        actual_request = replace(request, scanner_id=actual.id)
+        capabilities.compatible_sources(actual_request)
+        return backend.prepare(actual, actual_request)
+
+    def release(self, keep_alive: int) -> None:
+        if self._active_backend is not None:
+            release = getattr(self._active_backend, "release", None)
+            if release is not None:
+                release(keep_alive)
 
 
 class _HPLIPScanJob(ScanJob):

@@ -3,7 +3,37 @@ import io
 import unittest
 from unittest import mock
 
-from scanbox import cli, ui
+from scanbox import cli, config, selection, ui
+from scanbox.contracts import Backend, Scanner
+
+
+class DiscoveryBackend(Backend):
+    def __init__(self):
+        self.released = []
+
+    @property
+    def name(self):
+        return "wsd"
+
+    def discover(self):
+        return ()
+
+    def inspect(self, scanner):
+        raise AssertionError("validation is mocked")
+
+    def prepare(self, scanner, request):
+        raise AssertionError("scanners must not prepare acquisition")
+
+    def release(self, minutes):
+        self.released.append(minutes)
+
+
+class FakeCatalog:
+    def __init__(self, candidate):
+        self.candidate = candidate
+
+    def discover(self):
+        return selection.Inventory((self.candidate,))
 
 
 class ScanTargetArgumentTests(unittest.TestCase):
@@ -25,44 +55,68 @@ class ScanTargetArgumentTests(unittest.TestCase):
             cli.build_parser().parse_args(["scan", "--protocol", "legacy"])
 
 
-class SetupIdentityTests(unittest.TestCase):
-    def test_bonjour_discovery_saves_hplip_backend(self):
-        found = cli.discover.Instance(
-            "HP instance", "hp.local", {
-                "ty": "HP LaserJet 200 color MFP M276nw",
-                "UUID": "5DE90400-1DD2-11B2-84BC-9C934E010299",
-            },
+class ScannerRegistryCommandTests(unittest.TestCase):
+    def test_discovered_scanner_is_validated_and_saved(self):
+        backend = DiscoveryBackend()
+        candidate = selection.Candidate(
+            Scanner(
+                "wsd:urn:uuid:5de90400-1dd2-11b2-84bc-9c934e010299",
+                "Xerox WorkCentre", "wsd", "http://192.0.2.52/ws/",
+                address="192.0.2.52",
+            ),
+            backend,
         )
-        with contextlib.redirect_stderr(io.StringIO()), \
-                mock.patch.object(cli.config, "exists", return_value=False), \
-                mock.patch.object(cli.discover, "instances", return_value=[found.name]), \
-                mock.patch.object(cli.discover, "resolve_instance", return_value=found), \
-                mock.patch.object(cli.discover, "resolve_ipv4", return_value="192.0.2.20"), \
-                mock.patch.object(cli.ui, "tty_readable", return_value=True), \
-                mock.patch.object(cli.ui, "ask", return_value=""), \
-                mock.patch.object(cli.config, "save") as save:
-            self.assertEqual(cli.main(["setup"]), 0)
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()), \
+                mock.patch.object(cli.selection, "current_network_catalog",
+                                  return_value=FakeCatalog(candidate)), \
+                mock.patch.object(cli.selection, "validate", return_value=candidate) as validate, \
+                mock.patch.object(cli.config, "load_registry",
+                                  return_value=config.ScannerRegistry()), \
+                mock.patch.object(cli.config, "remember") as remember:
+            self.assertEqual(cli.main(["scanners", "--save"]), 0)
 
-        configured = save.call_args.args[0]
-        self.assertEqual(
-            configured.id, "uuid:5de90400-1dd2-11b2-84bc-9c934e010299"
-        )
-        self.assertEqual(configured.name, "HP LaserJet 200 color MFP M276nw")
-        self.assertEqual(configured.host, "hp.local")
-        self.assertEqual(configured.backend, "hplip")
+        validate.assert_called_once()
+        saved = remember.call_args.args[0]
+        self.assertEqual(saved.name, "Xerox WorkCentre")
+        self.assertEqual(saved.address, "192.0.2.52")
+        self.assertEqual(saved.backend, "wsd")
+        self.assertEqual(backend.released, [60])
 
-    def test_host_setup_can_save_an_explicit_backend(self):
-        with contextlib.redirect_stderr(io.StringIO()), \
-                mock.patch.object(cli.config, "exists", return_value=False), \
-                mock.patch.object(cli.discover, "resolve_ipv4", return_value="192.0.2.52"), \
-                mock.patch.object(cli.config, "save") as save:
+    def test_manual_host_requires_and_saves_a_concrete_backend(self):
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()), \
+                mock.patch.object(cli.config, "remember") as remember:
             self.assertEqual(cli.main([
-                "setup", "--host", "xerox.local", "--backend", "wsd"
+                "scanners", "--save", "Xerox", "--host", "xerox.local",
+                "--backend", "wsd", "--preferred",
             ]), 0)
 
-        configured = save.call_args.args[0]
-        self.assertEqual(configured.host, "xerox.local")
-        self.assertEqual(configured.backend, "wsd")
+        saved = remember.call_args.args[0]
+        self.assertEqual(saved.host, "xerox.local")
+        self.assertEqual(saved.backend, "wsd")
+        self.assertTrue(remember.call_args.kwargs["preferred"])
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main([
+                "scanners", "--save", "--host", "xerox.local"
+            ]), 1)
+
+    def test_saved_display_is_offline_and_setup_is_removed(self):
+        registry = config.ScannerRegistry((config.ConfiguredScanner(
+            name="HP home", host="hp.local", backend="hplip"
+        ),))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), \
+                mock.patch.object(cli.config, "load_registry", return_value=registry), \
+                mock.patch.object(cli.selection, "current_network_catalog") as catalog:
+            self.assertEqual(cli.main(["scanners", "--saved"]), 0)
+        catalog.assert_not_called()
+        self.assertIn("HP home", output.getvalue())
+        self.assertIn("hplip", output.getvalue())
+
+        with self.assertRaises(ui.ScanboxError):
+            cli.build_parser().parse_args(["setup"])
 
 
 if __name__ == "__main__":

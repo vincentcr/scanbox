@@ -207,8 +207,8 @@ class Scanner:
     ``id`` is the stable physical identity used to group advertisements from
     different backends. ``backend`` names the implementation that produced
     this candidate, while ``endpoint`` is an opaque locator understood only by
-    that backend. It may be an ImageCapture persistent ID, a WSD URL, or an
-    HPLIP URI; shared code must not parse it.
+    that backend. Optional host/address fields are safe persistence fallbacks;
+    shared code must not parse the endpoint to derive them.
     """
 
     id: str
@@ -219,13 +219,17 @@ class Scanner:
     model: Optional[str] = None
     transport: Optional[str] = None
     serial_number: Optional[str] = None
+    host: Optional[str] = None
+    address: Optional[str] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _required_text(self.id, "id"))
         object.__setattr__(self, "name", _required_text(self.name, "name"))
         object.__setattr__(self, "backend", _required_text(self.backend, "backend"))
         object.__setattr__(self, "endpoint", _required_text(self.endpoint, "endpoint"))
-        for field in ("manufacturer", "model", "transport", "serial_number"):
+        for field in (
+            "manufacturer", "model", "transport", "serial_number", "host", "address"
+        ):
             object.__setattr__(self, field, _optional_text(getattr(self, field), field))
 
 

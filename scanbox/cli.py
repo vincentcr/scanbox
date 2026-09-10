@@ -1,4 +1,4 @@
-"""Argument parsing and the four verbs.
+"""Argument parsing for scanbox commands.
 
 Scanning moves paper, so it needs an explicit `scan` rather than being what you
 get for running the command with no arguments.
@@ -17,15 +17,18 @@ scanbox -- scan from the network MFP
                             auto    the feeder if loaded, else the bed (default)
                             feeder  force the document feeder
                             bed     force the flatbed
-  scanbox setup           find a scanner and save it as your config
-  scanbox scanners        list usable scanners on the current network
-  scanbox status          VM state, config, resolved scanner
+  scanbox scanners        discover, save, and manage scanners
+  scanbox status          VM state and saved-scanner configuration
   scanbox stop            stop the VM now
 
-Options (for setup)
-  --host=NAME       skip discovery and use this scanner
-  --backend B       save auto|wsd|hplip|imagecapture as its backend
-  --overwrite       replace an existing config without asking
+Options (for scanners)
+  --save [NAME]     discover, validate, and remember a scanner
+  --saved           show remembered scanners without using the network
+  --forget NAME     remove a remembered scanner
+  --prefer NAME     choose the tie-breaker among saved scanners
+  --preferred       make the scanner being saved the preferred one
+  --host NAME       with --save, remember a manually configured host
+  --backend B       filter discovery or set a manual host's backend
 
 Options (for scan)
   --out DIR         where scans land       (default ~/Pictures/Scans)
@@ -103,14 +106,17 @@ def build_parser() -> _Parser:
     p.add_argument("--scanner")
     p.add_argument("--backend", choices=config.BACKENDS)
 
-    p = sub.add_parser("setup", add_help=False)
+    _add_help(sub.add_parser("status", add_help=False))
+    p = sub.add_parser("scanners", add_help=False)
     _add_help(p)
+    operation = p.add_mutually_exclusive_group()
+    operation.add_argument("--save", nargs="?", const="auto", metavar="NAME")
+    operation.add_argument("--saved", action="store_true")
+    operation.add_argument("--forget", metavar="NAME")
+    operation.add_argument("--prefer", metavar="NAME")
+    p.add_argument("--preferred", action="store_true")
     p.add_argument("--host")
     p.add_argument("--backend", choices=config.BACKENDS)
-    p.add_argument("--overwrite", action="store_true")
-
-    _add_help(sub.add_parser("status", add_help=False))
-    _add_help(sub.add_parser("scanners", add_help=False))
     _add_help(sub.add_parser("stop", add_help=False))
 
     p = sub.add_parser("__idle-timer", add_help=False)
@@ -138,123 +144,15 @@ def cmd_scan(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_setup(args: argparse.Namespace) -> int:
-    # An existing config is confirmed before anything else happens, so a
-    # mistyped `setup` cannot cost you a working configuration. Nothing is
-    # written until the very end regardless.
-    if config.exists() and not args.overwrite:
-        ui.say("This is already configured, at {}:".format(config.display_path()))
-        ui.say("")
-        for line in config.read_raw().splitlines():
-            ui.say("    " + line)
-        ui.say("")
-        if not ui.tty_readable():
-            ui.die("Replace it? -- but there is no terminal to ask on. "
-                   "Pass --overwrite.")
-        if not ui.confirm("Replace it?"):
-            ui.die("setup cancelled -- nothing was changed.")
-        ui.say("")
-
-    host = args.host or ""
-    configured = None
-    if not host:
-        with ui.Spinner("searching for scanners on the network"):
-            names = discover.instances(5)
-        found = []
-        for name in names:
-            with ui.Spinner("resolving {}".format(name)):
-                found.append(discover.resolve_instance(name))
-        if not found:
-            ui.die("no scanners found on this network.\n"
-                   "Check the printer is switched on and on the same network "
-                   "as this Mac.")
-
-        count = len(found)
-        ui.say("Found {} scanner{}:".format(count, "" if count == 1 else "s"))
-        ui.say("")
-        for i, inst in enumerate(found, 1):
-            ui.say("  {}) {}".format(i, inst.model))
-            ui.say("     {}{}".format(
-                inst.host or "<unresolved>",
-                "  (has a document feeder)" if inst.has_feeder else ""))
-        ui.say("")
-
-        if not ui.tty_readable():
-            ui.die("no terminal to choose on. Re-run with --host=<hostname>.")
-        while True:
-            prompt = ("Which one? [1] " if count == 1
-                      else "Which one? [1-{}] ".format(count))
-            choice = ui.ask(prompt)
-            # A lone Enter takes the only candidate, but never guesses between
-            # several.
-            if not choice and count == 1:
-                choice = "1"
-            if choice.isdigit() and 1 <= int(choice) <= count:
-                break
-            ui.say("  please enter a number between 1 and {}".format(count))
-        chosen = found[int(choice) - 1]
-        host = chosen.host or ""
-        if not host:
-            ui.die("that scanner did not resolve to a hostname; "
-                   "re-run with --host=<hostname>.")
-        configured = config.ConfiguredScanner(
-            id=chosen.stable_id,
-            name=chosen.model,
-            host=host,
-            backend=args.backend or "hplip",
-        )
-        ui.say("")
-
-    if configured is None:
-        if discover.is_ipv4(host):
-            configured = config.ConfiguredScanner(
-                address=host, backend=args.backend or "auto"
-            )
-        else:
-            configured = config.ConfiguredScanner(
-                host=host, backend=args.backend or "auto"
-            )
-
-    # Confirm it is actually reachable, but do not refuse to save if it is not
-    # -- setting this up while away from the printer's network is legitimate.
-    with ui.Spinner("checking {}".format(host)):
-        ip = host if discover.is_ipv4(host) else discover.resolve_ipv4(host)
-    if ip:
-        ui.say("{} resolves to {}".format(host, ip))
-    else:
-        ui.warn("note: {} does not resolve from here. Saving anyway -- it should "
-                "work\n      once you are back on the printer's network.".format(host))
-
-    config.save(configured)
-    ui.say("")
-    ui.say("Saved to {}. Scan with:".format(config.display_path()))
-    ui.say("")
-    ui.say("    scanbox scan")
-    return 0
-
-
 def cmd_status(args: argparse.Namespace) -> int:
     vm.require_lima()
     print("VM          {}".format(vm.status() if vm.exists() else "not created"))
     print("config      {}".format(
-        config.path() if config.exists() else "none -- run: scanbox setup"))
-    if config.exists():
-        configured = config.load_scanner()
-        print("scanner     {}".format(
-            configured.label if configured is not None else "unset"))
-        if configured is not None:
-            print("identity    {}".format(configured.id or "<not advertised>"))
-            print("backend     {}".format(configured.backend))
-            print("locator     {}".format(
-                configured.locator or "<discover by identity>"))
-        # Not being able to resolve is a normal thing for status to report, not
-        # a reason to abort before printing the rest.
-        try:
-            ip = scan.resolve_configured_address()
-        except ui.ScanboxError:
-            ip = None
-        print("address     {}".format(
-            ip or "<unresolved> (not on this network?)"))
+        config.path() if config.exists() else "none -- run: scanbox scanners --save"))
+    registry = config.load_registry()
+    print("scanners    {} saved".format(len(registry.scanners)))
+    if registry.preferred_scanner is not None:
+        print("preferred   {}".format(registry.preferred_scanner.label))
     print("output      {}".format(paths.DEFAULT_OUT_DIR))
     if vm.timer_running():
         print("idle timer  running ({}s since last scan)".format(
@@ -265,23 +163,112 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_scanners(args: argparse.Namespace) -> int:
+    if args.preferred and args.save is None:
+        ui.die("--preferred requires --save")
+    if args.host and args.save is None:
+        ui.die("--host requires --save")
+    if args.saved:
+        _print_saved(config.load_registry())
+        return 0
+    if args.forget:
+        before = config.load_registry()
+        removed = next(
+            (scanner for scanner in before.scanners
+             if args.forget.casefold() in {
+                 scanner.key.casefold(), (scanner.id or "").casefold(),
+                 scanner.label.casefold(), (scanner.locator or "").casefold(),
+             }), None,
+        )
+        config.forget(args.forget)
+        print("Forgot {}.".format(removed.label if removed else args.forget))
+        return 0
+    if args.prefer:
+        registry = config.set_preferred(args.prefer)
+        print("Preferred scanner: {}.".format(registry.preferred_scanner.label))
+        return 0
+
+    if args.host:
+        if args.backend not in ("wsd", "hplip"):
+            ui.die("a manual --host requires --backend wsd or --backend hplip")
+        scanner = config.ConfiguredScanner(
+            name=None if args.save == "auto" else args.save,
+            host=None if discover.is_ipv4(args.host) else args.host,
+            address=args.host if discover.is_ipv4(args.host) else None,
+            backend=args.backend,
+        )
+        config.remember(scanner, preferred=args.preferred)
+        print("Saved {} via {}.".format(scanner.label, scanner.backend))
+        return 0
+
     catalog = selection.current_network_catalog()
-    with ui.Spinner("searching for usable scanners on this network"):
+    with ui.Spinner("searching for scanners on this network"):
         inventory = catalog.discover()
     for failure in inventory.failures:
         ui.warn("{} discovery: {}".format(failure.backend, failure.message))
-    if not inventory.candidates:
-        print("No usable scanners found on this network.")
+    groups = inventory.physical
+    if args.backend not in (None, "auto"):
+        groups = tuple(
+            selection.PhysicalCandidate(group.identity, tuple(
+                candidate for candidate in group.candidates
+                if candidate.backend.name == args.backend
+            ))
+            for group in groups
+            if any(candidate.backend.name == args.backend for candidate in group.candidates)
+        )
+    if not groups:
+        print("No scanners found on this network.")
         return 0
-    for index, candidate in enumerate(inventory.candidates):
+
+    if args.save is not None:
+        group = selection.select_group(
+            groups, args.save, interactive=ui.tty_readable(),
+            ask=ui.ask, say=ui.say,
+        )
+        candidate = None
+        try:
+            with ui.Spinner("checking {} without scanning".format(group.name)):
+                candidate = selection.validate(group, args.backend)
+            scanner = selection.configured(candidate)
+            config.remember(scanner, preferred=args.preferred)
+        finally:
+            if candidate is not None:
+                release = getattr(candidate.backend, "release", None)
+                if release is not None:
+                    release(60)
+        print("Saved {} via {}.".format(scanner.label, scanner.backend))
+        return 0
+
+    registry = config.load_registry()
+    for index, group in enumerate(groups):
         if index:
             print("")
-        scanner = candidate.scanner
-        print(scanner.name)
-        print("  id       {}".format(scanner.id))
-        print("  backend  {}".format(scanner.backend))
-        print("  endpoint {}".format(scanner.endpoint))
+        saved = next(
+            (item for item in registry.scanners
+             if selection.matches_saved(group, item)), None,
+        )
+        marker = "* " if saved and saved.key == registry.preferred else "  "
+        print(marker + group.name)
+        print("    id        {}".format(group.display_id))
+        print("    backends  {}".format(", ".join(group.backend_names)))
+        if saved:
+            print("    saved     yes{}".format(
+                " (preferred)" if saved.key == registry.preferred else ""
+            ))
     return 0
+
+
+def _print_saved(registry: config.ScannerRegistry) -> None:
+    if not registry.scanners:
+        print("No saved scanners.")
+        return
+    for index, scanner in enumerate(registry.scanners):
+        if index:
+            print("")
+        marker = "* " if scanner.key == registry.preferred else "  "
+        print(marker + scanner.label)
+        print("    id       {}".format(scanner.id or "<not advertised>"))
+        print("    backend  {}".format(scanner.backend))
+        print("    locator  {}".format(scanner.locator or "<discover by identity>"))
 
 
 def cmd_stop(args: argparse.Namespace) -> int:
@@ -291,8 +278,8 @@ def cmd_stop(args: argparse.Namespace) -> int:
     return 0
 
 
-HANDLERS = {"scan": cmd_scan, "setup": cmd_setup,
-            "scanners": cmd_scanners, "status": cmd_status, "stop": cmd_stop}
+HANDLERS = {"scan": cmd_scan, "scanners": cmd_scanners,
+            "status": cmd_status, "stop": cmd_stop}
 
 
 def _on_term(signum, frame) -> None:
@@ -324,6 +311,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
         return HANDLERS[args.cmd](args)
     except ui.ScanboxError as e:
+        ui.warn(str(e))
+        return 1
+    except ValueError as e:
         ui.warn(str(e))
         return 1
     except KeyboardInterrupt:

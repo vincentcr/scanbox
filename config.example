@@ -1,17 +1,17 @@
-# Copy to ~/.config/scanbox/config, or let `scanbox setup` write it.
-# SCANNER_ID is an advertised UUID, persistent ID, or serial number. It names
-# the physical scanner and does not contain its current IP address.
-SCANNER_ID=uuid:5de90400-1dd2-11b2-84bc-9c934e010299
-SCANNER_NAME=Office scanner
-
-# The hostname is a fallback locator and is resolved again for every scan, so
-# DHCP address changes do not change the configured scanner.
-SCANNER_HOST=office-scanner.local
-
-# auto lets scanbox choose a usable backend. wsd and hplip force the current
-# implementations. imagecapture is reserved for deferred macOS work and
-# currently reports that it is unavailable.
-SCANNER_BACKEND=auto
-
-# A fixed address is supported when the device has no resolvable hostname.
-#SCANNER_ADDRESS=192.168.1.50
+{
+  "preferred": "uuid:5de90400-1dd2-11b2-84bc-9c934e010299",
+  "scanners": [
+    {
+      "backend": "hplip",
+      "host": "home-scanner.local",
+      "id": "uuid:5de90400-1dd2-11b2-84bc-9c934e010299",
+      "name": "Home scanner"
+    },
+    {
+      "backend": "wsd",
+      "id": "wsd:urn:uuid:760e3bd4-39fc-4f22-8ad4-01fe8d3b9bf0",
+      "name": "Office scanner"
+    }
+  ],
+  "version": 1
+}

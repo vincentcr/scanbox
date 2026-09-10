@@ -6,23 +6,21 @@ host-side assembly, and staged-page cleanup. `scanbox.selection` builds the
 current-network inventory by retaining only advertisements paired with a
 usable backend, and implements exact name/stable-ID and interactive selection.
 
-`scanbox.routing` owns configured-device routing. It normalizes UUID and serial
-spellings so advertisements from different protocols can be grouped without
-using weak names or IP addresses as identity. In `auto` mode it prefers the WSD
-backend, matches the saved stable identity before consulting a hostname/address,
-and only considers HPLIP for an eligible HP device while preparation is still
-read-only. The returned job is the boundary: errors from `ScanJob.scan()` are
-never routed to another protocol. Route diagnostics name the accepted or
-rejected backend directly.
+`scanbox.selection` groups advertisements from different backends only when
+they share a strong UUID or serial identity. Saving validates candidates in
+backend-preference order without moving paper and records the concrete backend
+that worked. The returned job is the boundary: errors from `ScanJob.scan()` are
+never routed to another protocol.
 
-## Legacy HP through HPLIP
+## HP through HPLIP
 
-`HPLIPBackend` encapsulates the existing configured-HP path. It owns
+`HPLIPBackend` owns
 `hp-makeuri`, `hpaio` device construction, HPLIP capability inspection, Lima
 lifecycle hooks, the guest scan protocol, stale-session handling, remote
 cancellation, and copying acquired PNG pages back to the host. It is
-constructed only when routing selects `hplip`; it does not advertise
-candidates during host discovery.
+constructed only after `BonjourHPLIPBackend` discovers or routing selects an HP
+device. Bonjour discovery stays on the host and starts no VM; validation and
+acquisition are delegated lazily to the address-bound backend.
 
 The guest retains the HP M276-specific feeder trailing-edge measurement and
 HPLIP compression and busy-session behavior. Those accommodations therefore
@@ -57,10 +55,10 @@ the flatbed only after an explicit empty-feeder response. An ambiguous error,
 jam, or partially acquired batch stops in the WSD backend; protocol routing
 must never retry through another backend after this boundary.
 
-`WSDBackend.discover()` is currently the production source for the temporary
-current-network catalog. It runs entirely on the host, without inspecting the
-device or touching the VM. Only after the CLI selects a candidate does
-`prepare()` ensure the WSD guest and inspect capabilities.
+`WSDBackend.discover()` and `BonjourHPLIPBackend.discover()` are the production
+sources for the shared current-network catalog. They run concurrently on the
+host without touching the VM. Only after the CLI selects or saves a candidate
+does inspection ensure the required guest capabilities.
 
 This path is vendor-neutral: it depends on a scanner advertising the WSD scan
 service, not on its manufacturer. The Xerox used during development is one
@@ -73,8 +71,8 @@ than a shared-code vendor special case.
 `scanbox.vm` treats the guest runtime and installed software as separate
 concerns. It probes four capabilities from actual guest state rather than
 trusting one global marker: core SANE tools, sane-airscan, HPLIP/hpaio, and the
-HP plugin. Dependencies are additive and idempotent, so a VM created by an
-older scanbox remains usable and receives only a missing component.
+HP plugin. Dependencies are additive and idempotent, so each backend installs
+only capabilities that are actually missing.
 
 WSD requests `core -> wsd`; HPLIP requests
 `core -> hplip -> hp-plugin` and synchronizes its measurement helper. Each
@@ -92,7 +90,7 @@ python3 -m unittest discover -v
 
 The matrix covers WS-Discovery parsing and identity grouping, ambiguous dynamic
 selection, normalized capabilities, backend preference and safe pre-scan
-fallback, configuration migration, output-format selection, both guest line
+fallback, multi-scanner configuration, output-format selection, both guest line
 protocols, and capability-specific provisioning. The HPLIP guest test also
 asserts that every auto-sized feeder page passes through its HP-specific
 trailing-edge measurement.

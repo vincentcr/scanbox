@@ -149,6 +149,18 @@ class FakeRouter:
         )
 
 
+class FailoverRouter(FakeRouter):
+    def __init__(self, backend):
+        super().__init__(backend)
+        self.attempts = []
+
+    def prepare(self, configured, request, backend_preference=None):
+        self.attempts.append((configured.label, backend_preference))
+        if configured.name == "Home HP":
+            raise routing.RoutingError("not on this network")
+        return super().prepare(configured, request, backend_preference)
+
+
 class FakeHPLIPRouter:
     def __init__(self, backend):
         self.backend = backend
@@ -195,11 +207,15 @@ class ScanOutputIntegrationTests(unittest.TestCase):
         backend = FakeBackend("192.0.2.20")
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr), \
-                mock.patch.object(config, "load_scanner", return_value=config.ConfiguredScanner(
-                    name="HP test", address="192.0.2.20", backend="hplip"
-                )), \
+                mock.patch.object(config, "load_registry", return_value=config.ScannerRegistry((
+                    config.ConfiguredScanner(
+                        name="HP test", address="192.0.2.20", backend="hplip"
+                    ),
+                ))), \
                 mock.patch.object(scan.output, "assemble", side_effect=assemble):
-            outputs = scan.run(options, router=FakeHPLIPRouter(backend))
+            outputs = scan.run(
+                options, catalog=FakeCatalog(), router=FakeHPLIPRouter(backend)
+            )
 
         self.assertEqual(outputs, [os.path.join(self.root, "documents.tiff")])
         self.assertEqual(backend.request.source, ScanSource.FEEDER)
@@ -222,7 +238,9 @@ class ScanOutputIntegrationTests(unittest.TestCase):
 
     def test_dynamic_selection_bypasses_and_preserves_config(self):
         config_path = os.path.join(self.root, "config")
-        original = b"SCANNER_HOST=home-scanner.local\nSCANNER_BACKEND=hplip\n"
+        original = (
+            b'{"version":1,"preferred":null,"scanners":[]}\n'
+        )
         with open(config_path, "wb") as stream:
             stream.write(original)
         backend = DynamicBackend()
@@ -236,12 +254,10 @@ class ScanOutputIntegrationTests(unittest.TestCase):
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr), \
                 mock.patch.object(config, "CONFIG_FILE", config_path), \
-                mock.patch.object(scan, "resolve_configured_address") as configured_resolver, \
                 mock.patch.object(scan.ui, "tty_readable", return_value=False), \
                 mock.patch.object(scan.output, "assemble", side_effect=assemble):
             outputs = scan.run(options, catalog=FakeCatalog(backend))
 
-        configured_resolver.assert_not_called()
         with open(config_path, "rb") as stream:
             self.assertEqual(stream.read(), original)
         self.assertEqual(outputs, [os.path.join(self.root, "away-from-home.pdf")])
@@ -259,13 +275,11 @@ class ScanOutputIntegrationTests(unittest.TestCase):
                 scan.run(options, catalog=FakeCatalog())
 
     def test_configured_scan_uses_router_and_cli_backend_override(self):
-        config_path = os.path.join(self.root, "config")
         configured = config.ConfiguredScanner(
             id="uuid:5de90400-1dd2-11b2-84bc-9c934e010299",
             name="Office scanner", host="office.local",
         )
-        with mock.patch.object(config, "CONFIG_FILE", config_path):
-            config.save(configured)
+        registry = config.ScannerRegistry((configured,))
         backend = DynamicBackend()
         router = FakeRouter(backend)
         options = scan.Options(
@@ -273,18 +287,45 @@ class ScanOutputIntegrationTests(unittest.TestCase):
         )
 
         with contextlib.redirect_stderr(io.StringIO()), \
-                mock.patch.object(config, "CONFIG_FILE", config_path), \
-                mock.patch.object(scan, "resolve_configured_address") as configured_resolver, \
+                mock.patch.object(config, "load_registry", return_value=registry), \
                 mock.patch.object(scan.output, "assemble", return_value=(
                     os.path.join(self.root, "configured.pdf"),
                 )):
-            outputs = scan.run(options, router=router)
+            outputs = scan.run(options, catalog=FakeCatalog(), router=router)
 
-        configured_resolver.assert_not_called()
         self.assertEqual(outputs, [os.path.join(self.root, "configured.pdf")])
         self.assertEqual(router.configured, configured)
         self.assertEqual(router.backend_preference, "wsd")
         self.assertEqual(router.request.scanner_id, configured.id)
+
+    def test_saved_scan_falls_through_to_scanner_on_current_network(self):
+        home = config.ConfiguredScanner(
+            id="serial:home-hp", name="Home HP", host="hp.local",
+            backend="hplip",
+        )
+        office = config.ConfiguredScanner(
+            id="serial:office-xerox", name="Office Xerox", host="xerox.local",
+            backend="wsd",
+        )
+        registry = config.ScannerRegistry((home, office), home.key)
+        backend = DynamicBackend()
+        router = FailoverRouter(backend)
+        options = scan.Options(out_dir=self.root, name="network-hop")
+        catalog = mock.Mock()
+
+        with contextlib.redirect_stderr(io.StringIO()), \
+                mock.patch.object(config, "load_registry", return_value=registry), \
+                mock.patch.object(scan.output, "assemble", return_value=(
+                    os.path.join(self.root, "network-hop.pdf"),
+                )):
+            outputs = scan.run(options, catalog=catalog, router=router)
+
+        catalog.discover.assert_not_called()
+        self.assertEqual(router.attempts, [
+            ("Home HP", "hplip"),
+            ("Office Xerox", "wsd"),
+        ])
+        self.assertEqual(outputs, [os.path.join(self.root, "network-hop.pdf")])
 
 
 if __name__ == "__main__":

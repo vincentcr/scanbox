@@ -9,6 +9,7 @@ sane-airscan's eSCL/WSD protocol preference participates in a job.
 Discovery, inspection, and preparation do not move paper. Only ``scan()`` on
 the prepared job invokes scanimage.
 """
+import ipaddress
 import os
 import re
 import shutil
@@ -142,12 +143,22 @@ def parse_probe_response(data: bytes) -> Tuple[Scanner, ...]:
         if not endpoints:
             continue
         endpoint = endpoints[0]
+        endpoint_host = urlsplit(endpoint).hostname
+        host = address = None
+        if endpoint_host:
+            try:
+                ipaddress.ip_address(endpoint_host)
+                address = endpoint_host
+            except ValueError:
+                host = endpoint_host
         found.append(Scanner(
             id=stable_id,
             name=_friendly_name(_element_text(match, "Scopes"), endpoint),
             backend=BACKEND_NAME,
             endpoint=endpoint,
             transport="network-wsd",
+            host=host,
+            address=address,
         ))
     return tuple(found)
 
