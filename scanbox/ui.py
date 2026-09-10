@@ -127,11 +127,12 @@ def show_cursor() -> None:
 def tty_readable() -> bool:
     """Whether we can read and write a prompt on the controlling terminal.
 
-    /dev/tty passes a readability check on permissions even with no controlling
-    terminal, so actually opening it is the only reliable test. Use the same
-    read/write mode as ask(): a sandbox can permit reading the device while
-    refusing the write needed to display a prompt.
+    Prefer the inherited streams. Some terminal sandboxes provide perfectly
+    usable TTY stdin/stderr while denying a second open of ``/dev/tty``. The
+    latter remains useful when stdin has been redirected.
     """
+    if sys.stdin.isatty() and sys.stderr.isatty():
+        return True
     try:
         with open("/dev/tty", "r+"):
             return True
@@ -140,7 +141,11 @@ def tty_readable() -> bool:
 
 
 def ask(prompt: str) -> str:
-    """Read one line from the terminal, not stdin, so prompting survives piping."""
+    """Read one line from inherited TTY streams or the controlling terminal."""
+    if sys.stdin.isatty() and sys.stderr.isatty():
+        sys.stderr.write(prompt)
+        sys.stderr.flush()
+        return (sys.stdin.readline() or "").strip()
     with open("/dev/tty", "r+") as tty:
         tty.write(prompt)
         tty.flush()

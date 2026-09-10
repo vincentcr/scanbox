@@ -4,6 +4,7 @@ Scanning moves paper, so it needs an explicit `scan` rather than being what you
 get for running the command with no arguments.
 """
 import argparse
+import shlex
 import signal
 import sys
 from typing import List, Optional
@@ -220,10 +221,33 @@ def cmd_scanners(args: argparse.Namespace) -> int:
         return 0
 
     if args.save is not None:
-        group = selection.select_group(
-            groups, args.save, interactive=ui.tty_readable(),
-            ask=ui.ask, say=ui.say,
-        )
+        interactive = ui.tty_readable()
+        try:
+            group = selection.select_group(
+                groups, args.save, interactive=interactive,
+                ask=ui.ask, say=ui.say,
+            )
+        except selection.SelectionError as error:
+            if interactive or args.save.casefold() != "auto" or len(groups) < 2:
+                raise
+            examples = []
+            for item in groups:
+                selector = item.display_id
+                if selector == "<not advertised>":
+                    selector = item.name
+                command = "  scanbox scanners --save {}".format(
+                    shlex.quote(selector)
+                )
+                if len(item.candidates) == 1:
+                    command += " --backend {}".format(
+                        shlex.quote(item.candidates[0].backend.name)
+                    )
+                examples.append(command)
+            raise selection.SelectionError(
+                "{}\n\nChoose one explicitly:\n{}".format(
+                    error, "\n".join(examples)
+                )
+            )
         candidate = None
         try:
             with ui.Spinner("checking {} without scanning".format(group.name)):

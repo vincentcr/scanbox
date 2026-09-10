@@ -8,12 +8,13 @@ from scanbox.contracts import Backend, Scanner
 
 
 class DiscoveryBackend(Backend):
-    def __init__(self):
+    def __init__(self, name="wsd"):
+        self._name = name
         self.released = []
 
     @property
     def name(self):
-        return "wsd"
+        return self._name
 
     def discover(self):
         return ()
@@ -29,11 +30,11 @@ class DiscoveryBackend(Backend):
 
 
 class FakeCatalog:
-    def __init__(self, candidate):
-        self.candidate = candidate
+    def __init__(self, *candidates):
+        self.candidates = candidates
 
     def discover(self):
-        return selection.Inventory((self.candidate,))
+        return selection.Inventory(self.candidates)
 
 
 class ScanTargetArgumentTests(unittest.TestCase):
@@ -117,6 +118,55 @@ class ScannerRegistryCommandTests(unittest.TestCase):
 
         with self.assertRaises(ui.ScanboxError):
             cli.build_parser().parse_args(["setup"])
+
+    def test_save_prompts_for_ambiguous_discovery_on_a_terminal(self):
+        backend = DiscoveryBackend()
+        first = selection.Candidate(Scanner(
+            "serial:first", "First scanner", "wsd", "http://192.0.2.60/ws/"
+        ), backend)
+        second = selection.Candidate(Scanner(
+            "serial:second", "Second scanner", "wsd", "http://192.0.2.61/ws/"
+        ), backend)
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()), \
+                mock.patch.object(cli.selection, "current_network_catalog",
+                                  return_value=FakeCatalog(first, second)), \
+                mock.patch.object(cli.ui, "tty_readable", return_value=True), \
+                mock.patch.object(cli.ui, "ask", return_value="2") as ask, \
+                mock.patch.object(cli.selection, "validate", return_value=second), \
+                mock.patch.object(cli.config, "remember") as remember:
+            self.assertEqual(cli.main(["scanners", "--save"]), 0)
+
+        ask.assert_called_once_with("Which one? [1-2] ")
+        self.assertEqual(remember.call_args.args[0].name, "Second scanner")
+
+    def test_noninteractive_save_prints_commands_that_disambiguate(self):
+        hplip = DiscoveryBackend("hplip")
+        wsd = DiscoveryBackend()
+        first = selection.Candidate(Scanner(
+            "bonjour:hp", "HP LaserJet", "hplip", "hp.local", host="hp.local"
+        ), hplip)
+        second = selection.Candidate(Scanner(
+            "wsd:urn:uuid:5de90400-1dd2-11b2-84bc-9c934e010299",
+            "WSD scanner at 192.0.2.62", "wsd", "http://192.0.2.62/ws/",
+            address="192.0.2.62",
+        ), wsd)
+        error = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(error), \
+                mock.patch.object(cli.selection, "current_network_catalog",
+                                  return_value=FakeCatalog(first, second)), \
+                mock.patch.object(cli.ui, "tty_readable", return_value=False):
+            self.assertEqual(cli.main(["scanners", "--save"]), 1)
+
+        message = error.getvalue()
+        self.assertIn(
+            "scanbox scanners --save 'HP LaserJet' --backend hplip", message
+        )
+        self.assertIn(
+            "scanbox scanners --save uuid:5de90400-1dd2-11b2-84bc-9c934e010299 "
+            "--backend wsd", message
+        )
 
 
 if __name__ == "__main__":
