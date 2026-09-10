@@ -1,6 +1,7 @@
 import unittest
+from unittest import mock
 
-from scanbox import selection
+from scanbox import config, selection
 from scanbox.contracts import (
     Backend,
     BackendError,
@@ -39,6 +40,12 @@ def scanner(identifier, name, backend="test", endpoint=None):
 
 
 class CatalogTests(unittest.TestCase):
+    def test_production_catalog_contains_wsd_and_hplip_discovery(self):
+        catalog = selection.current_network_catalog(discovery_seconds=0.1)
+        self.assertEqual(tuple(backend.name for backend in catalog.backends), (
+            "wsd", "hplip",
+        ))
+
     def test_zero_one_and_duplicate_discovery_cases(self):
         empty = FakeBackend("empty")
         item = scanner("scanner-1", "Office scanner")
@@ -95,8 +102,8 @@ class SelectionTests(unittest.TestCase):
         with self.assertRaises(selection.SelectionError) as raised:
             selection.select((self.first, self.second), "auto")
         message = str(raised.exception)
-        self.assertIn(selection.describe(self.first), message)
-        self.assertIn(selection.describe(self.second), message)
+        self.assertIn("Alpha scanner", message)
+        self.assertIn("Beta scanner", message)
 
     def test_multiple_interactive_prompts_until_valid_choice(self):
         answers = iter(("", "3", "2"))
@@ -107,6 +114,56 @@ class SelectionTests(unittest.TestCase):
         )
         self.assertIs(chosen, self.second)
         self.assertTrue(any("please enter" in line for line in output))
+
+    def test_cross_backend_uuid_advertisements_form_one_physical_scanner(self):
+        wsd_backend = FakeBackend("wsd")
+        hplip_backend = FakeBackend("hplip")
+        candidates = (
+            selection.Candidate(scanner(
+                "wsd:urn:uuid:5de90400-1dd2-11b2-84bc-9c934e010299",
+                "Office scanner", "wsd", "http://192.0.2.20/ws/",
+            ), wsd_backend),
+            selection.Candidate(scanner(
+                "uuid:5DE90400-1DD2-11B2-84BC-9C934E010299",
+                "Office scanner", "hplip", "office.local",
+            ), hplip_backend),
+        )
+
+        groups = selection.group_candidates(candidates)
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0].backend_names, ("wsd", "hplip"))
+
+    def test_saved_scanner_matches_identity_before_locator(self):
+        candidate = selection.Candidate(scanner(
+            "wsd:urn:uuid:5de90400-1dd2-11b2-84bc-9c934e010299",
+            "Office scanner", "wsd", "http://192.0.2.99/ws/",
+        ), FakeBackend("wsd"))
+        group = selection.group_candidates((candidate,))[0]
+        saved = config.ConfiguredScanner(
+            id="uuid:5DE90400-1DD2-11B2-84BC-9C934E010299",
+            host="old.local", backend="wsd",
+        )
+
+        self.assertTrue(selection.matches_saved(group, saved))
+
+    def test_validation_falls_back_before_any_scan_is_prepared(self):
+        broken = FakeBackend("wsd", error=None)
+        working = FakeBackend("hplip", error=None)
+        broken.inspect = mock.Mock(side_effect=BackendError(
+            BackendErrorCode.UNAVAILABLE, "not usable", backend="wsd"
+        ))
+        working.inspect = mock.Mock(return_value=object())
+        group = selection.group_candidates((
+            selection.Candidate(scanner("serial:test", "Test", "wsd"), broken),
+            selection.Candidate(scanner("serial:test", "Test", "hplip"), working),
+        ))[0]
+
+        chosen = selection.validate(group)
+
+        self.assertIs(chosen.backend, working)
+        broken.inspect.assert_called_once()
+        working.inspect.assert_called_once()
 
 
 if __name__ == "__main__":

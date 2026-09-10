@@ -72,6 +72,7 @@ class ProbeResponseTests(unittest.TestCase):
             "wsd:urn:uuid:01234567-89ab-cdef-0123-456789abcdef",
         )
         self.assertEqual(found[0].name, "Xerox WorkCentre 6605DN")
+        self.assertEqual(found[0].address, "192.0.2.25")
         self.assertEqual(found[0].endpoint, "http://192.0.2.25:5358/WSDScanner")
         self.assertEqual(found[0].backend, BACKEND_NAME)
 

@@ -90,8 +90,7 @@ class GuestLegacyRasterTests(unittest.TestCase):
         result = subprocess.run(
             [
                 "bash", paths.GUEST_SCAN_SH, "hpaio:/net/test", "Flatbed",
-                "Color", "300", "letter", "0", "name", "", "pdf",
-                "0", "0", "1",
+                "Color", "300", "letter", "0", "",
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -120,8 +119,7 @@ class GuestLegacyRasterTests(unittest.TestCase):
         result = subprocess.run(
             [
                 "bash", paths.GUEST_SCAN_SH, "hpaio:/net/test", "Flatbed",
-                "Color", "300", "letter", "0", "name", "", "pdf",
-                "0", "0", "1",
+                "Color", "300", "letter", "0", "",
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -151,8 +149,7 @@ class GuestLegacyRasterTests(unittest.TestCase):
         result = subprocess.run(
             [
                 "bash", paths.GUEST_SCAN_SH, "hpaio:/net/test", "ADF",
-                "Color", "300", "auto", "0", "name", "", "pdf",
-                "0", "0", "1",
+                "Color", "300", "auto", "0", "",
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

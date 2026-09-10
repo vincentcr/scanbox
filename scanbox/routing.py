@@ -6,11 +6,10 @@ It returns exactly one prepared job; once the caller invokes ``scan()``, this
 module is no longer involved and cross-protocol retry is impossible.
 """
 from dataclasses import dataclass, replace
-import re
-import uuid
 from typing import Callable, Iterable, List, Optional, Sequence, Tuple
 
 from . import config, discover
+from .identity import stable_identity
 from .backends.hplip import HPLIPBackend, supports_configured as supports_hplip
 from .backends.wsd import WSDBackend
 from .contracts import (
@@ -18,12 +17,6 @@ from .contracts import (
 )
 
 BACKENDS = config.BACKENDS
-
-_UUID_SEARCH_RE = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
-    r"[0-9a-f]{4}-[0-9a-f]{12}",
-    re.IGNORECASE,
-)
 
 EventHandler = Callable[[str, str], None]
 HPLIPFactory = Callable[..., Backend]
@@ -52,26 +45,6 @@ class PreparedRoute:
     scanner: Scanner
     job: ScanJob
     diagnostics: Tuple[str, ...]
-
-
-def stable_identity(value: Optional[str]) -> Optional[str]:
-    """Normalize cross-protocol UUID/serial spellings for physical grouping."""
-    if not value:
-        return None
-    text = value.strip()
-    match = _UUID_SEARCH_RE.search(text)
-    if match:
-        try:
-            return "uuid:" + str(uuid.UUID(match.group(0)))
-        except ValueError:
-            return None
-    lowered = text.casefold()
-    marker = lowered.find("serial:")
-    if marker >= 0:
-        serial = text[marker + len("serial:"):].strip()
-        if serial:
-            return "serial:" + serial.casefold()
-    return None
 
 
 def group_scanners(scanners: Iterable[Scanner]) -> Tuple[PhysicalScanner, ...]:
