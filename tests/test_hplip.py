@@ -172,9 +172,9 @@ class HPLIPScanJobTests(unittest.TestCase):
 
         guest_args = streamed[0][0]
         self.assertEqual(
-            guest_args[-12:],
+            guest_args[-7:],
             [legacy_scanner().endpoint, "ADF", "Gray", "600", "legal", "1",
-             "scan", job.run_id, "pdf", "0", "0", "1"],
+             job.run_id],
         )
         self.assertEqual(streamed[0][1]["stdin_path"], paths.GUEST_SCAN_SH)
         self.assertEqual(events[:3], [

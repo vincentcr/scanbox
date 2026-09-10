@@ -1,10 +1,4 @@
-"""Backend-neutral scanner configuration and pre-schema migration.
-
-The configured scanner is identified independently of its current address or
-acquisition implementation. ``PRINTER_HOST`` and ``PRINTER_IP`` remain valid
-inputs and are migrated to the new schema atomically when the configured path
-is used.
-"""
+"""Backend-neutral scanner configuration."""
 from dataclasses import dataclass
 import os
 import tempfile
@@ -92,19 +86,11 @@ def load() -> Dict[str, str]:
 def _from_values(values: Dict[str, str]) -> Optional[ConfiguredScanner]:
     if not values:
         return None
-    modern = any(key.startswith("SCANNER_") for key in values)
-    if modern:
-        identity = values.get("SCANNER_ID") or None
-        name = values.get("SCANNER_NAME") or None
-        host = values.get("SCANNER_HOST") or None
-        address = values.get("SCANNER_ADDRESS") or None
-        backend = values.get("SCANNER_BACKEND") or "auto"
-    else:
-        identity = None
-        name = None
-        host = values.get("PRINTER_HOST") or None
-        address = values.get("PRINTER_IP") or None
-        backend = "auto"
+    identity = values.get("SCANNER_ID") or None
+    name = values.get("SCANNER_NAME") or None
+    host = values.get("SCANNER_HOST") or None
+    address = values.get("SCANNER_ADDRESS") or None
+    backend = values.get("SCANNER_BACKEND") or "auto"
     if not any((identity, host, address)):
         return None
     return ConfiguredScanner(identity, name, host, address, backend)
@@ -149,21 +135,10 @@ def save(scanner: ConfiguredScanner) -> None:
     _write_atomic(_serialize(scanner))
 
 
-def load_scanner(*, migrate: bool = False) -> Optional[ConfiguredScanner]:
-    """Load either schema and optionally replace a legacy file atomically."""
-    values = load()
-    scanner = _from_values(values)
-    if scanner is not None and migrate and not any(
-            key.startswith("SCANNER_") for key in values):
-        save(scanner)
-    return scanner
+def load_scanner() -> Optional[ConfiguredScanner]:
+    return _from_values(load())
 
 
 def scanner_label() -> Optional[str]:
     scanner = load_scanner()
     return scanner.label if scanner is not None else None
-
-
-def printer_label() -> Optional[str]:
-    """Compatibility alias for callers predating backend-neutral config."""
-    return scanner_label()

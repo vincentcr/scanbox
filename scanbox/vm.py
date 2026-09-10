@@ -153,11 +153,6 @@ def is_hplip_provisioned() -> bool:
     ))
 
 
-# Kept for callers outside the package that used the old HP-specific name.
-def is_provisioned() -> bool:
-    return is_hplip_provisioned()
-
-
 def is_wsd_provisioned() -> bool:
     return all(is_capability_provisioned(capability) for capability in (
         Capability.CORE, Capability.WSD,
@@ -279,11 +274,6 @@ def ensure_hplip() -> None:
     """Ensure HPLIP support, including its proprietary plugin."""
     ensure_capabilities(Capability.HP_PLUGIN)
     sync_lib()
-
-
-def ensure() -> None:
-    """Compatibility alias for the original HPLIP-only guest entry point."""
-    ensure_hplip()
 
 
 def ensure_wsd() -> None:

@@ -21,8 +21,8 @@ rejected backend directly.
 `hp-makeuri`, `hpaio` device construction, HPLIP capability inspection, Lima
 lifecycle hooks, the guest scan protocol, stale-session handling, remote
 cancellation, and copying acquired PNG pages back to the host. It is
-constructed only when routing selects `hplip` or the CLI
-uses `--printer`; it does not advertise candidates during host discovery.
+constructed only when routing selects `hplip`; it does not advertise
+candidates during host discovery.
 
 The guest retains the HP M276-specific feeder trailing-edge measurement and
 HPLIP compression and busy-session behavior. Those accommodations therefore

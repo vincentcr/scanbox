@@ -1,19 +1,14 @@
 #!/bin/bash
-# Runs INSIDE the VM. Scans and sizes pages, then either exposes raw rasters to
-# the Python host or follows the older guest-side output compatibility path.
+# Runs INSIDE the VM. Scans and sizes pages, then exposes raw rasters to the
+# Python host for output assembly.
 #
-#   guest-scan.sh <uri> <source> <mode> <dpi> <page> <lossless> <name>
-#                 [runid] [format] [image] [split] [raster-only]
+#   guest-scan.sh <uri> <source> <mode> <dpi> <page> <lossless> <runid>
 #
-# Output lines include PAGE, SOURCE, PAGES, and either RASTER or OUT paths.
+# Output lines include PAGE, SOURCE, PAGES, and RASTER paths.
 set -euo pipefail
 
-URI="$1"; SOURCE="$2"; MODE="$3"; DPI="$4"; PAGE="$5"; LOSSLESS="$6"; NAME="$7"
-RUNID="${8:-}"
-FORMAT="${9:-pdf}"
-IMAGE="${10:-0}"
-SPLIT="${11:-0}"
-RASTER_ONLY="${12:-0}"
+URI="$1"; SOURCE="$2"; MODE="$3"; DPI="$4"; PAGE="$5"; LOSSLESS="$6"
+RUNID="${7:-}"
 
 AUTOFIT="${SCANBOX_AUTOFIT:-/usr/local/lib/scanbox/autofit.sh}"
 OUTDIR="${SCANBOX_GUEST_OUTDIR:-/tmp/scanbox-out}"
@@ -211,115 +206,16 @@ if [ "$used" = "ADF" ] && [ "$PAGE" = "auto" ]; then
   done
 fi
 
-# The Python host now owns output policy and assembly. Keep the old guest-side
-# assembly below as a compatibility path for callers that do not request raw
-# rasters yet. Moving these files out of $tmp makes them survive this script's
-# cleanup trap long enough for the host to copy them out of the VM.
-if [ "$RASTER_ONLY" = "1" ]; then
-  i=0
-  rasters=()
-  for f in "$tmp"/p*.png; do
-    i=$((i + 1))
-    dst="$OUTDIR/$(printf 'p%04d.png' "$i")"
-    mv "$f" "$dst"
-    rasters+=("$dst")
-  done
-  echo "SOURCE $used"
-  echo "PAGES $n"
-  for raster in "${rasters[@]}"; do echo "RASTER $raster"; done
-  exit 0
-fi
-
-# --image describes intent rather than a particular container. Resolve it only
-# now, because source=auto does not tell us whether the feeder or flatbed won
-# until after the feeder probe. A joined feeder batch needs the one image format
-# here that supports multiple pages. Lineart stays PNG even when the transfer was
-# compressed: JPEG is a poor final encoding for hard one-bit edges and text.
-if [ "$FORMAT" = "auto" ] && [ "$IMAGE" = "1" ]; then
-  if [ "$used" = "ADF" ] && [ "$SPLIT" = "0" ]; then
-    FORMAT=tiff
-  elif [ "$LOSSLESS" = "1" ] || [ "$MODE" = "Lineart" ]; then
-    FORMAT=png
-  else
-    FORMAT=jpeg
-  fi
-fi
-
-# Every page is kept, blanks included -- predictable beats clever.
-#
-# Assembly can be its own slow step, right after the scanner has already gone
-# quiet: a 430MB lossless page takes ImageMagick a while to convert, and silence
-# here reads as a stall just as easily as silence during the scan did -- hence a
-# phase line per format. PNG is the exception and the whole point of offering it:
-# the pages are already PNG, so there is nothing to convert, only to copy.
-outs=()
-case "$FORMAT" in
-  pdf)
-    if [ "$SPLIT" = "1" ]; then
-      echo "PHASE building the PDF page$([ "$n" -eq 1 ] || echo s)"
-      i=0
-      for f in "$tmp"/p*.png; do
-        i=$((i + 1))
-        if [ "$n" -eq 1 ]; then dst="$OUTDIR/$NAME.pdf"
-        else dst="$OUTDIR/$(printf '%s-p%03d.pdf' "$NAME" "$i")"
-        fi
-        convert "$f" -quality 88 "$dst"
-        outs+=("$dst")
-      done
-    else
-      echo "PHASE building the PDF"
-      convert "$tmp"/p*.png -quality 88 "$OUTDIR/$NAME.pdf"
-      outs=("$OUTDIR/$NAME.pdf")
-    fi
-    ;;
-  tiff)
-    if [ "$SPLIT" = "1" ]; then
-      echo "PHASE building the TIFF page$([ "$n" -eq 1 ] || echo s)"
-      i=0
-      for f in "$tmp"/p*.png; do
-        i=$((i + 1))
-        if [ "$n" -eq 1 ]; then dst="$OUTDIR/$NAME.tiff"
-        else dst="$OUTDIR/$(printf '%s-p%03d.tiff' "$NAME" "$i")"
-        fi
-        convert "$f" -compress Zip "$dst"
-        outs+=("$dst")
-      done
-    else
-      echo "PHASE building the TIFF"
-      convert "$tmp"/p*.png -compress Zip "$OUTDIR/$NAME.tiff"
-      outs=("$OUTDIR/$NAME.tiff")
-    fi
-    ;;
-  png)
-    echo "PHASE saving the PNG page$([ "$n" -eq 1 ] || echo s)"
-    i=0
-    for f in "$tmp"/p*.png; do
-      i=$((i + 1))
-      if [ "$n" -eq 1 ]; then dst="$OUTDIR/$NAME.png"
-      else dst="$OUTDIR/$(printf '%s-p%03d.png' "$NAME" "$i")"
-      fi
-      cp "$f" "$dst"
-      outs+=("$dst")
-    done
-    ;;
-  jpeg)
-    echo "PHASE building the JPEG$([ "$n" -eq 1 ] || echo s)"
-    i=0
-    for f in "$tmp"/p*.png; do
-      i=$((i + 1))
-      if [ "$n" -eq 1 ]; then dst="$OUTDIR/$NAME.jpg"
-      else dst="$OUTDIR/$(printf '%s-p%03d.jpg' "$NAME" "$i")"
-      fi
-      convert "$f" -quality 92 "$dst"
-      outs+=("$dst")
-    done
-    ;;
-  *)
-    echo "bad format: $FORMAT" >&2
-    exit 2
-    ;;
-esac
-
+# Moving these files out of $tmp makes them survive the cleanup trap long enough
+# for the host to copy them out of the VM.
+i=0
+rasters=()
+for f in "$tmp"/p*.png; do
+  i=$((i + 1))
+  dst="$OUTDIR/$(printf 'p%04d.png' "$i")"
+  mv "$f" "$dst"
+  rasters+=("$dst")
+done
 echo "SOURCE $used"
 echo "PAGES $n"
-for o in "${outs[@]}"; do echo "OUT $o"; done
+for raster in "${rasters[@]}"; do echo "RASTER $raster"; done

@@ -149,6 +149,26 @@ class FakeRouter:
         )
 
 
+class FakeHPLIPRouter:
+    def __init__(self, backend):
+        self.backend = backend
+
+    def prepare(self, configured, request, backend_preference=None):
+        prepared = request.__class__(
+            self.backend.scanner.id,
+            source=request.source,
+            mode=request.mode,
+            resolution=request.resolution,
+            page_size=request.page_size,
+            lossless=request.lossless,
+        )
+        job = self.backend.prepare(self.backend.scanner, prepared)
+        return routing.PreparedRoute(
+            "hplip", self.backend, self.backend.scanner, job,
+            ("selected backend hplip for test",),
+        )
+
+
 class ScanOutputIntegrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = tempfile.mkdtemp(prefix="scanbox-scan-output-")
@@ -171,18 +191,17 @@ class ScanOutputIntegrationTests(unittest.TestCase):
         options = scan.Options(
             source="ADF", mode="Lineart", dpi=600, image=True,
             out_dir=self.root, name="documents", keep_alive=17,
-            printer="home-scanner.local",
         )
+        backend = FakeBackend("192.0.2.20")
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr), \
-                mock.patch.object(scan, "resolve_configured_address", return_value="192.0.2.20"), \
-                mock.patch.object(scan, "HPLIPBackend", FakeBackend), \
+                mock.patch.object(config, "load_scanner", return_value=config.ConfiguredScanner(
+                    name="HP test", address="192.0.2.20", backend="hplip"
+                )), \
                 mock.patch.object(scan.output, "assemble", side_effect=assemble):
-            outputs = scan.run(options)
+            outputs = scan.run(options, router=FakeHPLIPRouter(backend))
 
         self.assertEqual(outputs, [os.path.join(self.root, "documents.tiff")])
-        backend = FakeBackend.instances[0]
-        self.assertEqual(backend.address, "192.0.2.20")
         self.assertEqual(backend.request.source, ScanSource.FEEDER)
         self.assertEqual(backend.request.mode.value, "lineart")
         self.assertEqual(backend.request.resolution, 600)
@@ -203,7 +222,7 @@ class ScanOutputIntegrationTests(unittest.TestCase):
 
     def test_dynamic_selection_bypasses_and_preserves_config(self):
         config_path = os.path.join(self.root, "config")
-        original = b"# keep comments byte-for-byte\nPRINTER_HOST=home-scanner.local\n"
+        original = b"SCANNER_HOST=home-scanner.local\nSCANNER_BACKEND=hplip\n"
         with open(config_path, "wb") as stream:
             stream.write(original)
         backend = DynamicBackend()

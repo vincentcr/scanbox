@@ -40,8 +40,7 @@ Options (for scan)
   --keep-alive MIN  idle minutes before the VM stops (default 60)
   --scanner NAME    use a current-network scanner by name or stable ID;
                     use auto to select or prompt without changing config
-  --backend B       override auto|wsd|hplip|imagecapture for this run
-  --printer HOST    HPLIP: override the configured HP host for this run"""
+  --backend B       override auto|wsd|hplip|imagecapture for this run"""
 
 # What the user types, and what SANE calls it.
 SOURCES = {"auto": "auto", "feeder": "ADF", "bed": "Flatbed", "flatbed": "Flatbed"}
@@ -101,9 +100,7 @@ def build_parser() -> _Parser:
     p.add_argument("--split", action="store_true")
     p.add_argument("--lossless", action="store_true")
     p.add_argument("--keep-alive", dest="keep_alive", type=int, default=60)
-    target = p.add_mutually_exclusive_group()
-    target.add_argument("--scanner")
-    target.add_argument("--printer")
+    p.add_argument("--scanner")
     p.add_argument("--backend", choices=config.BACKENDS)
 
     p = sub.add_parser("setup", add_help=False)
@@ -128,14 +125,12 @@ def cmd_scan(args: argparse.Namespace) -> int:
     if args.lossless and args.fmt == "jpeg":
         ui.warn("--lossless with --format jpeg pays for an uncompressed transfer "
                 "and then re-compresses it on disk anyway. Proceeding.")
-    if args.printer and args.backend not in (None, "hplip"):
-        ui.die("--printer uses HPLIP; use --backend hplip or omit it")
     dpi = args.dpi if args.dpi is not None else (600 if args.image else 300)
     opts = scan.Options(
         source=SOURCES[args.source], mode=args.mode, dpi=dpi, page=args.page,
         lossless=args.lossless, name=args.name, fmt=args.fmt,
         image=args.image, split=args.split,
-        out_dir=args.out_dir, keep_alive=args.keep_alive, printer=args.printer,
+        out_dir=args.out_dir, keep_alive=args.keep_alive,
         scanner=args.scanner, backend=args.backend,
     )
     for path in scan.run(opts):
@@ -244,7 +239,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     print("config      {}".format(
         config.path() if config.exists() else "none -- run: scanbox setup"))
     if config.exists():
-        configured = config.load_scanner(migrate=True)
+        configured = config.load_scanner()
         print("scanner     {}".format(
             configured.label if configured is not None else "unset"))
         if configured is not None:

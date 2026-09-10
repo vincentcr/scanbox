@@ -2,7 +2,7 @@
 
 Configured scans are prepared by the backend router. ``--scanner`` instead
 builds a temporary current-network inventory and never reads or writes that
-default; ``--printer`` is an explicit HPLIP address override.
+default.
 """
 import os
 import shutil
@@ -10,7 +10,7 @@ import time
 from typing import List, Optional, Tuple
 
 from . import config, discover, output, paths, selection, ui
-from .backends.hplip import HPLIPBackend, HPLIPError
+from .backends.hplip import HPLIPError
 from .contracts import BackendError, ScanMode, ScanRequest, ScanSource
 from .routing import Router
 
@@ -32,25 +32,18 @@ def lossless_estimate(dpi: int, mode: str, page: str) -> Tuple[int, int]:
     return int(round(total / 1000000)), int(round(total / LOSSLESS_RATE))
 
 
-def resolve_configured_address(override: Optional[str] = None) -> Optional[str]:
+def resolve_configured_address() -> Optional[str]:
     """Resolve the configured scanner's current address.
 
     Stable identity is deliberately not interpreted here; the router will use
-    it to match fresh advertisements. Until then, the compatibility path
-    resolves the saved hostname on every scan and only uses a fixed address
-    when no hostname is available.
+    it to match fresh advertisements. The saved hostname is resolved on every
+    scan and a fixed address is used only when no hostname is available.
     """
     host = ip = ""
-    if override:
-        if discover.is_ipv4(override):
-            ip = override
-        else:
-            host = override
-    else:
-        configured = config.load_scanner(migrate=True)
-        if configured is not None:
-            host = configured.host or ""
-            ip = configured.address or ""
+    configured = config.load_scanner()
+    if configured is not None:
+        host = configured.host or ""
+        ip = configured.address or ""
 
     if not ip and not host:
         ui.die("no scanner configured yet. Run:\n\n    scanbox setup")
@@ -108,7 +101,6 @@ class Options:
                  name: Optional[str] = None, fmt: Optional[str] = None,
                  image: bool = False, split: bool = False,
                  out_dir: Optional[str] = None, keep_alive: int = 60,
-                 printer: Optional[str] = None,
                  scanner: Optional[str] = None,
                  backend: Optional[str] = None) -> None:
         self.source = source
@@ -122,7 +114,6 @@ class Options:
         self.split = split
         self.out_dir = out_dir or paths.DEFAULT_OUT_DIR
         self.keep_alive = keep_alive
-        self.printer = printer
         self.scanner = scanner
         self.backend = backend
 
@@ -150,24 +141,12 @@ def _target_events():
     return discovery_event, lambda: discovery_spinner
 
 
-def _hplip_target(opts: Options, on_event):
-    ip = resolve_configured_address(opts.printer)
-    if not ip:
-        ui.die("could not reach the configured scanner.\n"
-               "Is the printer on, and are you on its network? "
-               "Run 'scanbox setup' to look again, or use "
-               "'scanbox scan --scanner auto' on this network.")
-    backend = HPLIPBackend(ip, on_event=on_event)
-    scanner = backend.discover()[0]
-    return backend, scanner
-
-
 def _current_network_target(opts: Options, catalog=None):
     if opts.backend == "imagecapture":
         ui.die("ImageCapture scanning is not available yet; use auto or wsd")
     if opts.backend == "hplip":
         ui.die("HPLIP cannot discover a temporary current-LAN scanner; "
-               "use the configured scanner or --printer HOST")
+               "save the scanner first")
     catalog = catalog or selection.current_network_catalog()
     with ui.Spinner("searching for usable scanners on this network"):
         inventory = catalog.discover()
@@ -198,7 +177,7 @@ def _request(opts: Options, scanner_id: str) -> ScanRequest:
 
 
 def _configured_route(opts: Options, *, router=None, on_event=None):
-    configured = config.load_scanner(migrate=True)
+    configured = config.load_scanner()
     if configured is None:
         ui.die("no scanner configured yet. Run:\n\n    scanbox setup")
     request = _request(
@@ -231,10 +210,6 @@ def run(opts: Options, *, catalog=None, router=None) -> List[str]:
                 backend, scanner = _current_network_target(opts, catalog)
                 request = _request(opts, scanner.id)
                 backend.on_event = relay
-                job = backend.prepare(scanner, request)
-            elif opts.printer is not None:
-                backend, scanner = _hplip_target(opts, relay)
-                request = _request(opts, scanner.id)
                 job = backend.prepare(scanner, request)
             else:
                 route = _configured_route(opts, router=router, on_event=relay)

@@ -1,7 +1,6 @@
-"""Legacy HP acquisition through HPLIP's ``hpaio`` SANE backend.
+"""HP acquisition through HPLIP's ``hpaio`` SANE backend.
 
-This module is the compatibility boundary around the original scanbox path.
-It deliberately owns every HP-specific detail: ``hp-makeuri``, the Lima
+This module owns every HP-specific detail: ``hp-makeuri``, the Lima
 guest, HPLIP's source/mode spellings, the guest line protocol, stale-session
 cleanup, and remote cancellation.  Callers receive the same normalized PNG
 pages as every other backend.
@@ -132,9 +131,9 @@ def _scanner_name(uri: str) -> str:
 def supports_configured(scanner) -> bool:
     """Whether a saved physical identity is a plausible HPLIP target.
 
-    Old configurations contain only a hostname or address, so they must be
-    probed to preserve compatibility.  New configurations normally include a
-    model name; a positively identified non-HP device must not trigger HPLIP
+    A configuration may contain only a hostname or address, so it must be
+    probed. Configurations normally include a model name; a positively
+    identified non-HP device must not trigger HPLIP
     provisioning merely because another protocol failed.  Keeping this vendor
     rule here prevents HP knowledge from leaking into the shared router.
     """
@@ -334,9 +333,7 @@ class _HPLIPScanJob(ScanJob):
                         str(self.request.resolution),
                         self.request.page_size.value,
                         "1" if self.request.lossless else "0",
-                        "scan",
                         self.run_id,
-                        "pdf", "0", "0", "1",
                     ]
 
                     def read_line(line: str) -> None:

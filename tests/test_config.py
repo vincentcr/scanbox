@@ -36,42 +36,6 @@ class ConfigTests(unittest.TestCase):
         values = config.load()
         self.assertEqual(values["SCANNER_ID"], expected.id)
         self.assertEqual(values["SCANNER_BACKEND"], "auto")
-        self.assertNotIn("PRINTER_HOST", values)
-
-    def test_legacy_host_and_ip_are_accepted_and_migrated_atomically(self):
-        self.write(
-            "# old install\nPRINTER_HOST=home-scanner.local\n"
-            "PRINTER_IP=192.0.2.20\n"
-        )
-
-        scanner = config.load_scanner(migrate=True)
-
-        self.assertEqual(scanner.host, "home-scanner.local")
-        self.assertEqual(scanner.address, "192.0.2.20")
-        self.assertEqual(scanner.backend, "auto")
-        values = config.load()
-        self.assertEqual(values["SCANNER_HOST"], "home-scanner.local")
-        self.assertEqual(values["SCANNER_ADDRESS"], "192.0.2.20")
-        self.assertNotIn("PRINTER_HOST", values)
-        self.assertEqual(
-            [name for name in os.listdir(self.root) if name.startswith(".config.")],
-            [],
-        )
-
-    def test_failed_migration_preserves_the_complete_legacy_file(self):
-        original = "# old install\nPRINTER_HOST=home-scanner.local\n"
-        self.write(original)
-
-        with mock.patch.object(config.os, "replace", side_effect=OSError("stop")):
-            with self.assertRaisesRegex(OSError, "stop"):
-                config.load_scanner(migrate=True)
-
-        with open(self.path) as stream:
-            self.assertEqual(stream.read(), original)
-        self.assertEqual(
-            [name for name in os.listdir(self.root) if name.startswith(".config.")],
-            [],
-        )
 
     def test_hostname_is_resolved_fresh_and_preferred_over_saved_address(self):
         config.save(config.ConfiguredScanner(

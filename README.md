@@ -85,8 +85,7 @@ scanbox setup --host 192.168.1.40 --backend wsd
 ```
 
 Setup asks before replacing an existing configuration. Use `--overwrite` to
-skip that confirmation. Existing configurations containing `PRINTER_HOST` or
-`PRINTER_IP` are accepted and migrated automatically.
+skip that confirmation.
 
 To use a scanner on the LAN temporarily, without reading or changing the saved
 configuration:
@@ -185,8 +184,7 @@ scanbox scan --backend hplip
 ```
 
 `--backend imagecapture` is reserved and currently reports that ImageCapture
-acquisition is unavailable. `--printer HOST` is a shortcut for an explicit
-HPLIP scan at that hostname or address.
+acquisition is unavailable.
 
 Provisioning is also selected lazily. WSD installs only core SANE tools and
 `sane-airscan`; it does not install HPLIP or HP's proprietary plugin. The HPLIP
