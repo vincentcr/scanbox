@@ -1,4 +1,4 @@
-"""Backend-neutral scanner configuration and legacy migration.
+"""Backend-neutral scanner configuration and pre-schema migration.
 
 The configured scanner is identified independently of its current address or
 acquisition implementation. ``PRINTER_HOST`` and ``PRINTER_IP`` remain valid
@@ -14,7 +14,7 @@ CONFIG_FILE = os.environ.get(
     "SCANBOX_CONFIG", os.path.expanduser("~/.config/scanbox/config")
 )
 
-PROTOCOLS = ("auto", "native", "wsd", "legacy")
+BACKENDS = ("auto", "wsd", "hplip", "imagecapture")
 
 
 def _optional(value: Optional[str], field: str) -> Optional[str]:
@@ -36,15 +36,15 @@ class ConfiguredScanner:
     name: Optional[str] = None
     host: Optional[str] = None
     address: Optional[str] = None
-    protocol: str = "auto"
+    backend: str = "auto"
 
     def __post_init__(self) -> None:
         for field in ("id", "name", "host", "address"):
             object.__setattr__(self, field, _optional(getattr(self, field), field))
-        protocol = str(self.protocol).strip().lower()
-        if protocol not in PROTOCOLS:
-            raise ValueError("unknown scanner protocol: {!r}".format(self.protocol))
-        object.__setattr__(self, "protocol", protocol)
+        backend = str(self.backend).strip().lower()
+        if backend not in BACKENDS:
+            raise ValueError("unknown scanner backend: {!r}".format(self.backend))
+        object.__setattr__(self, "backend", backend)
         if not any((self.id, self.host, self.address)):
             raise ValueError("configured scanner needs an identity or locator")
 
@@ -98,16 +98,16 @@ def _from_values(values: Dict[str, str]) -> Optional[ConfiguredScanner]:
         name = values.get("SCANNER_NAME") or None
         host = values.get("SCANNER_HOST") or None
         address = values.get("SCANNER_ADDRESS") or None
-        protocol = values.get("SCANNER_PROTOCOL") or "auto"
+        backend = values.get("SCANNER_BACKEND") or "auto"
     else:
         identity = None
         name = None
         host = values.get("PRINTER_HOST") or None
         address = values.get("PRINTER_IP") or None
-        protocol = "auto"
+        backend = "auto"
     if not any((identity, host, address)):
         return None
-    return ConfiguredScanner(identity, name, host, address, protocol)
+    return ConfiguredScanner(identity, name, host, address, backend)
 
 
 def _serialize(scanner: ConfiguredScanner) -> str:
@@ -120,7 +120,7 @@ def _serialize(scanner: ConfiguredScanner) -> str:
         ("SCANNER_NAME", scanner.name),
         ("SCANNER_HOST", scanner.host),
         ("SCANNER_ADDRESS", scanner.address),
-        ("SCANNER_PROTOCOL", scanner.protocol),
+        ("SCANNER_BACKEND", scanner.backend),
     )
     lines.extend("{}={}".format(key, value) for key, value in fields if value)
     return "\n".join(lines) + "\n"

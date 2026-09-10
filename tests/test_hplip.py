@@ -101,9 +101,9 @@ class HPLIPDiscoveryTests(unittest.TestCase):
         self.assertTrue(capabilities.sources[0].supports_lossless)
         self.assertIn("--all-options", commands[0])
 
-    def test_prepare_rejects_nonlegacy_scanner_and_unsupported_source(self):
+    def test_prepare_rejects_non_hplip_scanner_and_unsupported_source(self):
         backend = HPLIPBackend("192.0.2.20", ensure_guest=lambda: None)
-        wrong = Scanner("id", "Xerox", "sane-airscan-wsd", "http://example.test")
+        wrong = Scanner("id", "Xerox", "wsd", "http://example.test")
         with self.assertRaisesRegex(ValueError, "does not belong"):
             backend.prepare(wrong, ScanRequest("id"))
         with self.assertRaises(UnsupportedRequest):

@@ -1,8 +1,8 @@
 """User-facing scan orchestration over normalized acquisition backends.
 
-Configured scans are prepared by the protocol router. ``--scanner`` instead
+Configured scans are prepared by the backend router. ``--scanner`` instead
 builds a temporary current-network inventory and never reads or writes that
-default; ``--printer`` remains an explicit legacy compatibility path.
+default; ``--printer`` is an explicit HPLIP address override.
 """
 import os
 import shutil
@@ -32,8 +32,8 @@ def lossless_estimate(dpi: int, mode: str, page: str) -> Tuple[int, int]:
     return int(round(total / 1000000)), int(round(total / LOSSLESS_RATE))
 
 
-def resolve_printer(override: Optional[str] = None) -> Optional[str]:
-    """Resolve the configured scanner's locator for the legacy backend.
+def resolve_configured_address(override: Optional[str] = None) -> Optional[str]:
+    """Resolve the configured scanner's current address.
 
     Stable identity is deliberately not interpreted here; the router will use
     it to match fresh advertisements. Until then, the compatibility path
@@ -63,7 +63,7 @@ def resolve_printer(override: Optional[str] = None) -> Optional[str]:
 
 
 class ProgressDisplay:
-    """Translate normalized backend events into the legacy live display."""
+    """Translate normalized backend events into the live display."""
 
     def __init__(self, spinner: ui.Spinner, base: str) -> None:
         self.spinner = spinner
@@ -110,7 +110,7 @@ class Options:
                  out_dir: Optional[str] = None, keep_alive: int = 60,
                  printer: Optional[str] = None,
                  scanner: Optional[str] = None,
-                 protocol: Optional[str] = None) -> None:
+                 backend: Optional[str] = None) -> None:
         self.source = source
         self.mode = mode
         self.dpi = dpi
@@ -124,7 +124,7 @@ class Options:
         self.keep_alive = keep_alive
         self.printer = printer
         self.scanner = scanner
-        self.protocol = protocol
+        self.backend = backend
 
 
 class _EventRelay:
@@ -150,8 +150,8 @@ def _target_events():
     return discovery_event, lambda: discovery_spinner
 
 
-def _legacy_target(opts: Options, on_event):
-    ip = resolve_printer(opts.printer)
+def _hplip_target(opts: Options, on_event):
+    ip = resolve_configured_address(opts.printer)
     if not ip:
         ui.die("could not reach the configured scanner.\n"
                "Is the printer on, and are you on its network? "
@@ -163,10 +163,10 @@ def _legacy_target(opts: Options, on_event):
 
 
 def _current_network_target(opts: Options, catalog=None):
-    if opts.protocol == "native":
-        ui.die("native scanning is not available yet; use auto or wsd")
-    if opts.protocol == "legacy":
-        ui.die("legacy protocol cannot discover a temporary current-LAN scanner; "
+    if opts.backend == "imagecapture":
+        ui.die("ImageCapture scanning is not available yet; use auto or wsd")
+    if opts.backend == "hplip":
+        ui.die("HPLIP cannot discover a temporary current-LAN scanner; "
                "use the configured scanner or --printer HOST")
     catalog = catalog or selection.current_network_catalog()
     with ui.Spinner("searching for usable scanners on this network"):
@@ -205,12 +205,12 @@ def _configured_route(opts: Options, *, router=None, on_event=None):
         opts, configured.id or configured.locator or "configured-scanner"
     )
     router = router or Router(on_event=on_event)
-    route = router.prepare(configured, request, preference=opts.protocol)
+    route = router.prepare(
+        configured, request, backend_preference=opts.backend
+    )
     for diagnostic in route.diagnostics:
         ui.say("  routing: " + diagnostic)
-    ui.say("using {} via {} ({})".format(
-        route.scanner.name, route.protocol, route.backend.name
-    ))
+    ui.say("using {} via {}".format(route.scanner.name, route.backend_name))
     return route
 
 
@@ -233,7 +233,7 @@ def run(opts: Options, *, catalog=None, router=None) -> List[str]:
                 backend.on_event = relay
                 job = backend.prepare(scanner, request)
             elif opts.printer is not None:
-                backend, scanner = _legacy_target(opts, relay)
+                backend, scanner = _hplip_target(opts, relay)
                 request = _request(opts, scanner.id)
                 job = backend.prepare(scanner, request)
             else:

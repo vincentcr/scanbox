@@ -8,12 +8,12 @@ usable backend, and implements exact name/stable-ID and interactive selection.
 
 `scanbox.routing` owns configured-device routing. It normalizes UUID and serial
 spellings so advertisements from different protocols can be grouped without
-using weak names or IP addresses as identity. In `auto` mode it prefers WSD,
-matches the saved stable identity before consulting a hostname/address, and
-only considers a vendor-owned legacy backend while preparation is still
+using weak names or IP addresses as identity. In `auto` mode it prefers the WSD
+backend, matches the saved stable identity before consulting a hostname/address,
+and only considers HPLIP for an eligible HP device while preparation is still
 read-only. The returned job is the boundary: errors from `ScanJob.scan()` are
-never routed to another protocol. Route diagnostics record why protocols were
-accepted or rejected and name both the selected protocol and implementation.
+never routed to another protocol. Route diagnostics name the accepted or
+rejected backend directly.
 
 ## Legacy HP through HPLIP
 
@@ -21,7 +21,7 @@ accepted or rejected and name both the selected protocol and implementation.
 `hp-makeuri`, `hpaio` device construction, HPLIP capability inspection, Lima
 lifecycle hooks, the guest scan protocol, stale-session handling, remote
 cancellation, and copying acquired PNG pages back to the host. It is
-constructed only when routing selects the legacy path or the compatibility CLI
+constructed only when routing selects `hplip` or the CLI
 uses `--printer`; it does not advertise candidates during host discovery.
 
 The guest retains the HP M276-specific feeder trailing-edge measurement and
@@ -76,7 +76,7 @@ trusting one global marker: core SANE tools, sane-airscan, HPLIP/hpaio, and the
 HP plugin. Dependencies are additive and idempotent, so a VM created by an
 older scanbox remains usable and receives only a missing component.
 
-WSD requests `core -> wsd`; legacy HP requests
+WSD requests `core -> wsd`; HPLIP requests
 `core -> hplip -> hp-plugin` and synchronizes its measurement helper. Each
 provisioning failure names the component that failed. Host-side discovery has
 no dependency on any of these capabilities and therefore cannot create or
@@ -91,9 +91,9 @@ python3 -m unittest discover -v
 ```
 
 The matrix covers WS-Discovery parsing and identity grouping, ambiguous dynamic
-selection, normalized capabilities, protocol preference and safe pre-scan
+selection, normalized capabilities, backend preference and safe pre-scan
 fallback, configuration migration, output-format selection, both guest line
-protocols, and capability-specific provisioning. The legacy guest test also
+protocols, and capability-specific provisioning. The HPLIP guest test also
 asserts that every auto-sized feeder page passes through its HP-specific
 trailing-edge measurement.
 
@@ -104,11 +104,10 @@ Hardware verified during this refactor:
   three pages;
 - lazy WSD preparation using only the core and sane-airscan capability plan.
 
-A post-refactor HP/HPLIP hardware run still requires access to the configured
-home-LAN scanner. Until that is repeated, the legacy path is regression-covered
-by its backend, guest-protocol, routing, output, and provisioning tests rather
-than a current physical-device result.
+A post-refactor 600 dpi color flatbed scan completed through HPLIP on the
+configured HP M276, including guest-to-host copy and PDF assembly. HP feeder
+auto-sizing is covered by its per-page guest regression test.
 
-Native macOS ImageCapture acquisition is deferred backlog work. `native` is a
-reserved protocol value that reports unavailable before discovery or guest
+Native macOS ImageCapture acquisition is deferred backlog work. `imagecapture`
+is a reserved backend value that reports unavailable before discovery or guest
 startup; it is not a current backend.

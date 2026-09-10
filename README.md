@@ -80,8 +80,8 @@ Setup discovers Bonjour-advertised scanners and writes
 configure its hostname or fixed address directly:
 
 ```sh
-scanbox setup --host office-scanner.local
-scanbox setup --host 192.168.1.40
+scanbox setup --host office-scanner.local --backend hplip
+scanbox setup --host 192.168.1.40 --backend wsd
 ```
 
 Setup asks before replacing an existing configuration. Use `--overwrite` to
@@ -165,27 +165,31 @@ accommodation, not a promise made for every WSD scanner.
 
 ## Backend selection
 
-A saved configuration uses `auto` by default. scanbox first looks for the same
-physical scanner over WSD, matching its stable identity before its current
-hostname or address. For an eligible HP device, it can fall back to HPLIP if WSD
-fails during discovery or capability inspection.
+Setup saves Bonjour `_scanner._tcp` discoveries as `hplip`, because that is the
+HP discovery path backed by this project. A manual `--host` setup accepts
+`--backend auto|wsd|hplip|imagecapture`; without it, the backend remains `auto`.
+
+With `auto`, scanbox first looks for the same physical scanner over WSD,
+matching its stable identity before its current hostname or address. For an
+eligible HP device, it can fall back to HPLIP if WSD fails during discovery or
+capability inspection.
 
 It never switches protocols after acquisition begins: once paper might have
 moved, an error is reported rather than risking a duplicate or incomplete scan.
 
-You can override routing for one configured scan:
+You can override backend selection for one configured scan:
 
 ```sh
-scanbox scan --protocol wsd
-scanbox scan --protocol legacy
+scanbox scan --backend wsd
+scanbox scan --backend hplip
 ```
 
-`--protocol native` is reserved and currently reports that native acquisition
-is unavailable. `--printer HOST` remains as a compatibility shortcut for an
-explicit legacy HP scan.
+`--backend imagecapture` is reserved and currently reports that ImageCapture
+acquisition is unavailable. `--printer HOST` is a shortcut for an explicit
+HPLIP scan at that hostname or address.
 
 Provisioning is also selected lazily. WSD installs only core SANE tools and
-`sane-airscan`; it does not install HPLIP or HP's proprietary plugin. The legacy
+`sane-airscan`; it does not install HPLIP or HP's proprietary plugin. The HPLIP
 path installs its own dependencies only when selected.
 
 ## Status and troubleshooting
@@ -224,7 +228,7 @@ python3 -m unittest discover -v
 The automated suite covers both backend contracts, routing, discovery,
 selection, configuration migration, output assembly, guest protocols, and lazy
 provisioning. WSD discovery, flatbed scanning, and a complete three-page feeder
-batch have been exercised on the Xerox. The refactored legacy path has automated
+batch have been exercised on the Xerox. The refactored HPLIP path has automated
 regression coverage, but still awaits a repeat physical run against the HP on
 its home LAN.
 

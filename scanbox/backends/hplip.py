@@ -36,7 +36,7 @@ from ..contracts import (
     UnsupportedRequest,
 )
 
-BACKEND_NAME = "hplip-legacy"
+BACKEND_NAME = "hplip"
 
 EventHandler = Callable[[str, str], None]
 Runner = Callable[..., proc.Result]
@@ -112,7 +112,7 @@ def _source_name(source: ScanSource) -> str:
         }[source]
     except KeyError:
         raise UnsupportedRequest(
-            "the legacy HPLIP backend does not support source {}".format(source.value)
+            "the HPLIP backend does not support source {}".format(source.value)
         )
 
 
@@ -283,7 +283,7 @@ class HPLIPBackend(Backend):
         )
 
     def release(self, keep_alive: int) -> None:
-        """Keep the legacy guest warm for the configured idle period."""
+        """Keep the HPLIP guest warm for the configured idle period."""
         vm.idle_timer_arm(keep_alive)
 
 

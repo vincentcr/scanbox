@@ -8,10 +8,10 @@ SCANNER_NAME=Office scanner
 # DHCP address changes do not change the configured scanner.
 SCANNER_HOST=office-scanner.local
 
-# auto lets scanbox choose a usable protocol. wsd and legacy force a backend.
-# native is reserved for deferred macOS ImageCapture work and currently reports
-# that it is unavailable.
-SCANNER_PROTOCOL=auto
+# auto lets scanbox choose a usable backend. wsd and hplip force the current
+# implementations. imagecapture is reserved for deferred macOS work and
+# currently reports that it is unavailable.
+SCANNER_BACKEND=auto
 
 # A fixed address is supported when the device has no resolvable hostname.
 #SCANNER_ADDRESS=192.168.1.50

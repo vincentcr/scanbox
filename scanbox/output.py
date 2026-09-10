@@ -1,8 +1,8 @@
 """Backend-neutral assembly of acquired raster pages.
 
 Backends stop at producing :class:`~scanbox.contracts.ScanPage` files. This
-module applies the user's output policy once, on the host, so native, WSD, and
-legacy acquisition cannot drift in naming or container behavior.
+module applies the user's output policy once, on the host, so ImageCapture, WSD,
+and HPLIP acquisition cannot drift in naming or container behavior.
 
 The implementation uses tools shipped with macOS: ``sips`` for one-page
 conversion, ``tiffutil`` for lossless TIFF compression/joining, and the system

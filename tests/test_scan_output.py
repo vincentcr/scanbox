@@ -17,7 +17,7 @@ from scanbox.contracts import (
 
 
 class FakeJob:
-    diagnostics = ("legacy detail",)
+    diagnostics = ("hplip detail",)
     measurements = ("p0001: letter (measured 11.0in)",)
 
     def __init__(self, root):
@@ -31,7 +31,7 @@ class FakeJob:
                 stream.write(b"png raster")
             pages.append(ScanPage(index, path, "image/png", resolution=600))
         return ScanResult(
-            "hpaio:/net/test", "hplip-legacy", ScanSource.FEEDER,
+            "hpaio:/net/test", "hplip", ScanSource.FEEDER,
             tuple(pages), truncated=True,
         )
 
@@ -45,7 +45,7 @@ class FakeBackend:
         self.released = []
         self.request = None
         self.scanner = Scanner(
-            "hpaio:/net/test", "HP test", "hplip-legacy", "hpaio:/net/test"
+            "hpaio:/net/test", "HP test", "hplip", "hpaio:/net/test"
         )
         self.__class__.instances.append(self)
 
@@ -127,12 +127,12 @@ class FakeRouter:
         self.backend = backend
         self.configured = None
         self.request = None
-        self.preference = None
+        self.backend_preference = None
 
-    def prepare(self, configured, request, preference=None):
+    def prepare(self, configured, request, backend_preference=None):
         self.configured = configured
         self.request = request
-        self.preference = preference
+        self.backend_preference = backend_preference
         prepared = request.__class__(
             self.backend.scanner.id,
             source=request.source,
@@ -145,11 +145,11 @@ class FakeRouter:
         job = DynamicJob(DynamicBackend.page_root, self.backend.scanner)
         return routing.PreparedRoute(
             "wsd", self.backend, self.backend.scanner, job,
-            ("selected protocol wsd for test",),
+            ("selected backend wsd for test",),
         )
 
 
-class LegacyScanOutputIntegrationTests(unittest.TestCase):
+class ScanOutputIntegrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = tempfile.mkdtemp(prefix="scanbox-scan-output-")
         self.pages = tempfile.mkdtemp(prefix="scanbox-scan-pages-")
@@ -161,7 +161,7 @@ class LegacyScanOutputIntegrationTests(unittest.TestCase):
         shutil.rmtree(self.root, ignore_errors=True)
         shutil.rmtree(self.pages, ignore_errors=True)
 
-    def test_legacy_scan_uses_backend_contract_then_normalized_output(self):
+    def test_hplip_scan_uses_backend_contract_then_normalized_output(self):
         assembled = []
 
         def assemble(result, options, on_event=None):
@@ -175,7 +175,7 @@ class LegacyScanOutputIntegrationTests(unittest.TestCase):
         )
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr), \
-                mock.patch.object(scan, "resolve_printer", return_value="192.0.2.20"), \
+                mock.patch.object(scan, "resolve_configured_address", return_value="192.0.2.20"), \
                 mock.patch.object(scan, "HPLIPBackend", FakeBackend), \
                 mock.patch.object(scan.output, "assemble", side_effect=assemble):
             outputs = scan.run(options)
@@ -191,12 +191,12 @@ class LegacyScanOutputIntegrationTests(unittest.TestCase):
         self.assertEqual(result.source, ScanSource.FEEDER)
         self.assertEqual(len(result.pages), 2)
         self.assertTrue(result.truncated)
-        self.assertEqual(result.backend, "hplip-legacy")
+        self.assertEqual(result.backend, "hplip")
         self.assertIsNone(output_options.fmt)
         self.assertTrue(output_options.image)
         self.assertEqual(output_options.mode.value, "lineart")
         self.assertIsNotNone(event)
-        self.assertIn("legacy detail", stderr.getvalue())
+        self.assertIn("hplip detail", stderr.getvalue())
         self.assertIn("p0001: letter (measured 11.0in)", stderr.getvalue())
         self.assertIn("feeder, 2 page(s)", stderr.getvalue())
         self.assertIn("WARNING: the feeder stopped early", stderr.getvalue())
@@ -217,12 +217,12 @@ class LegacyScanOutputIntegrationTests(unittest.TestCase):
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr), \
                 mock.patch.object(config, "CONFIG_FILE", config_path), \
-                mock.patch.object(scan, "resolve_printer") as legacy_resolver, \
+                mock.patch.object(scan, "resolve_configured_address") as configured_resolver, \
                 mock.patch.object(scan.ui, "tty_readable", return_value=False), \
                 mock.patch.object(scan.output, "assemble", side_effect=assemble):
             outputs = scan.run(options, catalog=FakeCatalog(backend))
 
-        legacy_resolver.assert_not_called()
+        configured_resolver.assert_not_called()
         with open(config_path, "rb") as stream:
             self.assertEqual(stream.read(), original)
         self.assertEqual(outputs, [os.path.join(self.root, "away-from-home.pdf")])
@@ -239,7 +239,7 @@ class LegacyScanOutputIntegrationTests(unittest.TestCase):
             ):
                 scan.run(options, catalog=FakeCatalog())
 
-    def test_configured_scan_uses_router_and_cli_protocol_override(self):
+    def test_configured_scan_uses_router_and_cli_backend_override(self):
         config_path = os.path.join(self.root, "config")
         configured = config.ConfiguredScanner(
             id="uuid:5de90400-1dd2-11b2-84bc-9c934e010299",
@@ -250,21 +250,21 @@ class LegacyScanOutputIntegrationTests(unittest.TestCase):
         backend = DynamicBackend()
         router = FakeRouter(backend)
         options = scan.Options(
-            protocol="wsd", out_dir=self.root, name="configured"
+            backend="wsd", out_dir=self.root, name="configured"
         )
 
         with contextlib.redirect_stderr(io.StringIO()), \
                 mock.patch.object(config, "CONFIG_FILE", config_path), \
-                mock.patch.object(scan, "resolve_printer") as legacy_resolver, \
+                mock.patch.object(scan, "resolve_configured_address") as configured_resolver, \
                 mock.patch.object(scan.output, "assemble", return_value=(
                     os.path.join(self.root, "configured.pdf"),
                 )):
             outputs = scan.run(options, router=router)
 
-        legacy_resolver.assert_not_called()
+        configured_resolver.assert_not_called()
         self.assertEqual(outputs, [os.path.join(self.root, "configured.pdf")])
         self.assertEqual(router.configured, configured)
-        self.assertEqual(router.preference, "wsd")
+        self.assertEqual(router.backend_preference, "wsd")
         self.assertEqual(router.request.scanner_id, configured.id)
 
 
